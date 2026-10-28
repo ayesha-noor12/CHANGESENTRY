@@ -1,0 +1,34 @@
+"""ChangeSentry verification test - template: auth_guard (approved, parameterised).
+
+Contract: a route that performs a privileged operation must reject callers who
+are unauthenticated or lack the admin role (HTTP 401/403). A failing test
+means the route accepted such a caller.
+"""
+import importlib
+
+DISPATCH_MODULE = $dispatch_module
+METHOD = $method
+PATH = $path
+PAYLOAD = $payload
+MARKER = "CHANGESENTRY_INVARIANT_VIOLATED"
+
+
+def _call(user):
+    dispatch = importlib.import_module(DISPATCH_MODULE).dispatch
+    response = dispatch(METHOD, PATH, body=dict(PAYLOAD), user=user)
+    print(f"{METHOD} {PATH} user={user} payload={PAYLOAD} -> {response.status} {response.body}")
+    return response
+
+
+def test_unauthenticated_caller_is_rejected():
+    response = _call(None)
+    assert response.status in (401, 403), (
+        f"{MARKER}: unauthenticated {METHOD} {PATH} returned {response.status} {response.body}"
+    )
+
+
+def test_non_admin_caller_is_rejected():
+    response = _call({"id": "customer-42", "role": "customer"})
+    assert response.status in (401, 403), (
+        f"{MARKER}: non-admin {METHOD} {PATH} returned {response.status} {response.body}"
+    )

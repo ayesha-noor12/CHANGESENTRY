@@ -1,0 +1,4 @@
+# Runtime dependencies of the sample service
+python-dateutil==2.9.0
+# Planned: signature verification for provider webhooks
+PyJWT==1.7.1

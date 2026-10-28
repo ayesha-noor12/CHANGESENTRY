@@ -1,0 +1,8 @@
+{
+  "id": "safe-change",
+  "title": "Safe change baseline",
+  "description": "Documentation-only change: a README section and a docstring on the health endpoint. No security-sensitive logic or dependencies change.",
+  "category": "baseline",
+  "harness": {"dispatch_module": "app.main"},
+  "expected": {"verdict": "no_issue_detected", "confirmed_templates": [], "advisories": false}
+}

@@ -1,0 +1,8 @@
+{
+  "id": "auth-boundary",
+  "title": "Cross-file trust-boundary check",
+  "description": "A new payment-provider webhook calls the existing refund service. The existing admin route guards that service with require_admin; the new route does not. The change also adds a pinned dependency.",
+  "category": "security",
+  "harness": {"dispatch_module": "app.main"},
+  "expected": {"verdict": "issues_confirmed", "confirmed_templates": ["auth_guard"], "advisories": true}
+}

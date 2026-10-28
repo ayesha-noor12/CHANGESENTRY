@@ -1,0 +1,2 @@
+# Runtime dependencies of the sample service
+python-dateutil==2.9.0
