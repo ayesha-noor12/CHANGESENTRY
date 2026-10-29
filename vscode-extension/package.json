@@ -1,0 +1,91 @@
+{
+  "name": "changesentry",
+  "displayName": "ChangeSentry",
+  "description": "Prove what a code change broke: runs the same test on the base and head commits, with NVIDIA Nemotron hypotheses.",
+  "version": "0.1.0",
+  "publisher": "changesentry",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ayesha-noor12/CHANGESENTRY.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Testing",
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "changesentry.checkChanges",
+        "title": "Check my changes",
+        "category": "ChangeSentry",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "changesentry.showReport",
+        "title": "Show last report",
+        "category": "ChangeSentry"
+      },
+      {
+        "command": "changesentry.setNebiusKey",
+        "title": "Set Nebius API key",
+        "category": "ChangeSentry"
+      },
+      {
+        "command": "changesentry.setTavilyKey",
+        "title": "Set Tavily API key",
+        "category": "ChangeSentry"
+      },
+      {
+        "command": "changesentry.setupPython",
+        "title": "Set up Python environment",
+        "category": "ChangeSentry"
+      }
+    ],
+    "configuration": {
+      "title": "ChangeSentry",
+      "properties": {
+        "changesentry.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter with the ChangeSentry backend requirements installed. Leave empty to use the environment created by 'ChangeSentry: Set up Python environment'."
+        },
+        "changesentry.backendPath": {
+          "type": "string",
+          "default": "",
+          "description": "Folder containing the ChangeSentry backend (the one with app/cli.py). Leave empty to use the copy bundled with the extension."
+        },
+        "changesentry.nebiusBaseUrl": {
+          "type": "string",
+          "default": "https://api.tokenfactory.nebius.com/v1/",
+          "description": "Nebius Token Factory base URL."
+        },
+        "changesentry.nebiusModel": {
+          "type": "string",
+          "default": "nvidia/nemotron-3-super-120b-a12b",
+          "description": "Nemotron model id served by Nebius Token Factory."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "bundle-backend": "node scripts/bundle-backend.mjs",
+    "compile": "npm run bundle-backend && tsc -p .",
+    "watch": "tsc -watch -p .",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.10",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "3.2.1",
+    "typescript": "5.7.2"
+  }
+}

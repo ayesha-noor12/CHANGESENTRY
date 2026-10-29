@@ -1,0 +1,7 @@
+src/**
+scripts/**
+tsconfig.json
+node_modules/**
+**/*.map
+**/__pycache__/**
+.gitignore
