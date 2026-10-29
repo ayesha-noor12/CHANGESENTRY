@@ -112,6 +112,20 @@ PASS checkout-regression: model=ok verdict=issues_confirmed risks=1 confirmed=['
 
 Nemotron does not always pick the same target, for example `apply_discount` or `checkout_total`. The conclusion is the same either way, but the test hash depends on the target.
 
+## VS Code extension
+
+[`vscode-extension/`](vscode-extension/) runs the same pipeline on **your own git repository, locally**. Run **ChangeSentry: Check my changes**, pick the head (last commit or uncommitted changes) and the base (previous commit, `main` or any ref). The report opens beside your code, and the involved lines get Problems entries: an error for a confirmed regression.
+
+```bash
+cd vscode-extension && npm install && npm run package   # builds changesentry-0.1.0.vsix (bundles backend/app)
+```
+
+Install it with **Extensions → … → Install from VSIX**. Then run **ChangeSentry: Set Nebius API key**. The first check offers to install the Python backend into a private environment.
+
+To get a real git repository for a demo: `cd backend && python -m scripts.make_demo_repo checkout-regression ~/changesentry-demo`. It creates two commits (base, then the change); open the folder and compare `HEAD~1` with `HEAD`. The command-line equivalent is `python -m app.cli --repo ~/changesentry-demo --base HEAD~1 --head HEAD`.
+
+Because the extension runs locally on code you chose, it executes that code just as `pytest` would. That is why there is no hosted "paste any GitHub URL" mode: on a shared server, running strangers' code would expose the API keys and the machine.
+
 ## API
 
 | Method | Path | Notes |

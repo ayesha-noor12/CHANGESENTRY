@@ -85,19 +85,20 @@ class RunStore:
 STORE = RunStore()
 
 
-def run_analysis(run_id: str, store: RunStore = STORE) -> None:
+def run_analysis(run_id: str, store: RunStore = STORE, scenario: Scenario | None = None) -> None:
+    """Analyze a bundled scenario, or ``scenario`` when given (for example two git revisions)."""
     try:
-        _run(run_id, store)
+        _run(run_id, store, scenario)
         store.finish(run_id)
     except Exception as exc:  # surfaced to the dashboard; never replaced with a fabricated report
         traceback.print_exc()
         store.finish(run_id, error=f"{type(exc).__name__}: {exc}")
 
 
-def _run(run_id: str, store: RunStore) -> None:
+def _run(run_id: str, store: RunStore, scenario: Scenario | None = None) -> None:
     run = store.get(run_id)
     store.stage(run_id, "load", "running")
-    scenario = get_scenario(run.scenario_id)
+    scenario = scenario or get_scenario(run.scenario_id)
     if scenario is None:
         raise ValueError(f"unknown scenario '{run.scenario_id}'")
     before, after = read_tree(scenario.before_dir), read_tree(scenario.after_dir)

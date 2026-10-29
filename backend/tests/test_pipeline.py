@@ -147,3 +147,28 @@ def test_full_flow_with_stubbed_model(monkeypatch):
     assert risk.plan.source == "model" and risk.test_target == "shop.checkout:checkout_total"
     assert risk.status == "confirmed_by_test"
     assert report.verdict.status == "issues_confirmed"
+
+
+def test_cli_analyzes_two_git_commits(tmp_path, capsys):
+    import json
+
+    from app import cli
+    from scripts import make_demo_repo
+
+    repo = tmp_path / "checkout"
+    assert make_demo_repo.main("checkout-regression", str(repo)) == 0
+    assert cli.main(["--repo", str(repo), "--base", "HEAD~1", "--head", "HEAD"]) == 0
+    run = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert run["status"] == "completed"
+    assert [c["path"] for c in run["report"]["changed_files"]] == ["shop/pricing.py"]
+    assert run["report"]["base_existing_tests"]["status"] == "passed"
+
+
+def test_cli_reports_unknown_git_ref(tmp_path, capsys):
+    from app import cli
+    from scripts import make_demo_repo
+
+    repo = tmp_path / "safe"
+    make_demo_repo.main("safe-change", str(repo))
+    assert cli.main(["--repo", str(repo), "--base", "no-such-ref"]) == 2
+    assert '"event": "error"' in capsys.readouterr().err
