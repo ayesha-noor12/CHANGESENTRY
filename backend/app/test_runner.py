@@ -7,6 +7,7 @@ revisions, where it runs a fixed pytest command with a timeout.
 """
 import hashlib
 import itertools
+import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from app.repository_analyzer import FunctionInfo, RepoIndex, sample_payload
 from app.sandbox import disposable_copy, run_command
 
 MARKER = "CHANGESENTRY_INVARIANT_VIOLATED"
+CAPTURE_BANNER = re.compile(r"^-+ Captured .* -+$")
 TEST_FILE = "tests/test_changesentry_verification.py"
 PERCENT_VALUES = [0.0, 50.0, 100.0]
 AMOUNT_VALUES = [0.0, 10.0, 25.0, 100.0]
@@ -140,12 +142,14 @@ def _run_revision(revision: str, fixture_dir: Path, code: str) -> RevisionRun:
         junit = workspace.parent / "junit.xml"
         result, exit_code = run_command(
             f"verification ({revision})",
-            [sys.executable, "-m", "pytest", "-q", "-rA", "-p", "no:cacheprovider", "-s",
+            [sys.executable, "-m", "pytest", "-q", "-rA", "-p", "no:cacheprovider", "-o", "junit_logging=system-out",
              f"--junitxml={junit}", TEST_FILE],
             workspace, TEST_TIMEOUT_SECONDS,
         )
         cases = _parse_junit(junit)
-    command = result.command.replace(f"--junitxml={junit}", "--junitxml=<tmp>/junit.xml")
+    for field in ("command", "stdout", "stderr"):
+        setattr(result, field, getattr(result, field).replace(str(junit), "<tmp>/junit.xml"))
+    command = result.command
 
     failed = [c for c in cases if c["result"] == "failed"]
     errored = [c for c in cases if c["result"] == "error"]
@@ -175,6 +179,10 @@ def _parse_junit(path: Path) -> list[dict]:
                 outcome = {"failure": "failed", "error": "error", "skipped": "skipped"}[tag]
                 message = (el.get("message") or "")[:500]
                 break
+        out = case.find("system-out")
+        printed = [line for line in ((out.text or "") if out is not None else "").splitlines()
+                   if line.strip() and not CAPTURE_BANNER.match(line)]
         cases.append({"name": case.get("name"), "result": outcome, "message": message,
+                      "stdout": "\n".join(printed)[:2000],
                       "time": float(case.get("time") or 0)})
     return cases

@@ -69,7 +69,7 @@ export type Impact = {
   confidence: "high" | "medium" | "low";
 };
 
-export type TestCase = { name: string; result: string; message: string; time: number };
+export type TestCase = { name: string; result: string; message: string; stdout?: string; time: number };
 
 export type RevisionRun = {
   revision: "base" | "head";

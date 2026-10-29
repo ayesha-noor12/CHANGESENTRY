@@ -125,6 +125,10 @@ function FindingsTab({
         running && <div className="text-[12px] text-slate-500">Analysis in progress…</div>
       )}
 
+      {report.base_existing_tests && report.baseline_tests && (
+        <SuiteComparison base={report.base_existing_tests} head={report.baseline_tests} />
+      )}
+
       {report.risks.length === 0 && report.verdict && (
         <div className="rounded-md border border-white/5 px-3 py-2.5 text-[12px] text-slate-400">
           No risk hypotheses were raised for this change. This reflects only the checks listed below, not a guarantee.
@@ -269,9 +273,39 @@ function VerificationBlock({ v }: { v: NonNullable<Risk["verification"]> }) {
   );
 }
 
+function SuiteComparison({ base, head }: { base: CommandResult; head: CommandResult }) {
+  const badge = (c: CommandResult) =>
+    c.status === "passed" ? (
+      <Badge tone="green">PASS</Badge>
+    ) : c.status === "failed" ? (
+      <Badge tone="red">FAIL</Badge>
+    ) : (
+      <Badge tone="amber">{c.status.replace("_", " ").toUpperCase()}</Badge>
+    );
+  return (
+    <div className="space-y-1 rounded-md border border-white/10 px-3 py-2 text-[11.5px] text-slate-400">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Existing test suite on both revisions
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="w-9">base</span> {badge(base)} <span className="text-slate-500">{base.summary}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="w-9">head</span> {badge(head)} <span className="text-slate-500">{head.summary}</span>
+      </div>
+    </div>
+  );
+}
+
+/** The assertion message without pytest's expansion of the asserted expression. */
+function assertionMessage(message: string): string {
+  return message.split(/\nassert /)[0];
+}
+
 function RevisionCard({ run }: { run: RevisionRun }) {
   const badge = RUN_BADGE[run.outcome];
   const failure = run.test_cases.find((c) => c.result !== "passed" && c.message);
+  const printed = run.test_cases.map((c) => c.stdout).filter(Boolean) as string[];
   return (
     <div className="min-w-0 space-y-1 rounded border border-white/10 p-2">
       <div className="flex items-center gap-2 text-[11px]">
@@ -284,13 +318,25 @@ function RevisionCard({ run }: { run: RevisionRun }) {
       {run.test_cases.length > 0 && (
         <ul className="space-y-0.5 font-mono text-[11px]">
           {run.test_cases.map((c) => (
-            <li key={c.name} className={`truncate ${c.result === "passed" ? "text-emerald-300" : "text-red-300"}`}>
+            <li
+              key={c.name}
+              title={c.name}
+              className={`truncate ${c.result === "passed" ? "text-emerald-300" : "text-red-300"}`}
+            >
               {c.result === "passed" ? "✓" : "✗"} {c.name}
             </li>
           ))}
         </ul>
       )}
-      {failure && <Code className="max-h-24 whitespace-pre-wrap text-red-200/90">{failure.message}</Code>}
+      {printed.length > 0 && (
+        <Code className="max-h-40 whitespace-pre-wrap break-all text-[11px]">{printed.join("\n")}</Code>
+      )}
+      {failure && (
+        <div>
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-300/70">Failed assertion</div>
+          <Code className="whitespace-pre-wrap break-words text-[11px] text-red-200/90">{assertionMessage(failure.message)}</Code>
+        </div>
+      )}
       <Collapsible label="Output">
         <Code className="max-h-64">{(run.stdout + (run.stderr ? "\n" + run.stderr : "")).trim() || "(no output)"}</Code>
       </Collapsible>
