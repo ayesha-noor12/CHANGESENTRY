@@ -39,7 +39,10 @@ def _limit_resources():  # runs in the child before exec
     if resource is None:
         return
     resource.setrlimit(resource.RLIMIT_CPU, (20, 20))
-    resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+    except ValueError:  # macOS does not allow lowering RLIMIT_AS
+        pass
     os.setsid()
 
 
