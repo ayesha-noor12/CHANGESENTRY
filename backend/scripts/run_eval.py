@@ -30,6 +30,16 @@ def main() -> int:
         failures += bool(problems)
         print(f"{status} {scenario.summary.id}: model={report.model.status} verdict={report.verdict.status} "
               f"risks={len(report.risks)} confirmed={confirmed}")
+        base_suite, head_suite = report.base_existing_tests, report.baseline_tests
+        print(f"     existing tests: base={base_suite.status} ({base_suite.summary}) "
+              f"head={head_suite.status} ({head_suite.summary})")
+        for risk in report.risks:
+            v = risk.verification
+            if v and v.base and v.head:
+                print(f"     {v.template} {v.target}: base={v.base.outcome} head={v.head.outcome} -> {v.outcome} "
+                      f"({len(v.requirements)} base requirement(s), test sha256 {v.test_sha256[:12]})")
+            else:
+                print(f"     {risk.title}: not run ({v.note if v else 'no verification'})")
         for p in problems:
             print(f"     - {p}")
     return 1 if failures else 0

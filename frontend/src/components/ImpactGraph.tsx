@@ -154,7 +154,7 @@ export function ImpactGraph({
             edges={flowEdges}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
             nodesConnectable={false}
             proOptions={{ hideAttribution: true }}
             colorMode="dark"

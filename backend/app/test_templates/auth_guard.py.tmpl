@@ -1,7 +1,8 @@
 """ChangeSentry verification test - template: auth_guard (approved, parameterised).
 
 Contract: a route that performs a privileged operation must reject callers who
-are unauthenticated or lack the admin role (HTTP 401/403). A failing test
+are unauthenticated or lack the admin role (HTTP 401/403). A revision where the
+route is not registered (HTTP 404) also refuses the operation. A failing test
 means the route accepted such a caller.
 """
 import importlib
@@ -11,6 +12,7 @@ METHOD = $method
 PATH = $path
 PAYLOAD = $payload
 MARKER = "CHANGESENTRY_INVARIANT_VIOLATED"
+REJECTED = (401, 403, 404)
 
 
 def _call(user):
@@ -22,13 +24,13 @@ def _call(user):
 
 def test_unauthenticated_caller_is_rejected():
     response = _call(None)
-    assert response.status in (401, 403), (
+    assert response.status in REJECTED, (
         f"{MARKER}: unauthenticated {METHOD} {PATH} returned {response.status} {response.body}"
     )
 
 
 def test_non_admin_caller_is_rejected():
     response = _call({"id": "customer-42", "role": "customer"})
-    assert response.status in (401, 403), (
+    assert response.status in REJECTED, (
         f"{MARKER}: non-admin {METHOD} {PATH} returned {response.status} {response.body}"
     )

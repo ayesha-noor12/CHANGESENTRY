@@ -31,12 +31,13 @@ STAGES = [
     ("advisories", "Advisory search"),
     ("validate", "Validate AI response"),
     ("plan", "Plan verification"),
-    ("verify", "Run verification tests"),
+    ("verify", "Run tests on base and head"),
     ("report", "Build evidence report"),
 ]
 MAX_PLANNED_RISKS = 3
-STATUS_FROM_OUTCOME = {"confirmed": "confirmed_by_test", "not_reproduced": "not_reproduced",
-                       "error": "test_error", "not_run": "not_tested"}
+STATUS_FROM_OUTCOME = {"regression_confirmed": "confirmed_by_test", "behavior_changed": "behavior_changed",
+                       "fails_on_both": "preexisting_issue", "fixed_on_head": "not_reproduced",
+                       "not_reproduced": "not_reproduced", "inconclusive": "test_error", "not_run": "not_tested"}
 
 
 class RunStore:
@@ -105,6 +106,7 @@ def _run(run_id: str, store: RunStore) -> None:
     store.stage(run_id, "diff", "running")
     changes = compute_changes(before, after)
     index = build_index(after)
+    base_index = build_index(before)
     store.stage(run_id, "diff", "done", f"{len(changes)} changed file(s), {len(index.functions)} functions indexed")
 
     store.stage(run_id, "map", "running")
@@ -117,11 +119,14 @@ def _run(run_id: str, store: RunStore) -> None:
     python_files = [c.path for c in changes if c.language == "python" and c.change_type != "deleted"]
     with disposable_copy(scenario.after_dir) as workspace:
         report.static_checks = [run_ruff(workspace, python_files), run_bandit(workspace, python_files)]
-        report.baseline_tests = run_existing_tests(workspace)
+        report.baseline_tests = run_existing_tests(workspace, "existing tests (head)")
+    with disposable_copy(scenario.before_dir) as workspace:
+        report.base_existing_tests = run_existing_tests(workspace, "existing tests (base)")
     report.deterministic_signals = guard_consistency(index, changed)
     store.publish(run_id, report)
     store.stage(run_id, "checks", "done",
-                f"existing tests: {report.baseline_tests.summary}; {len(report.deterministic_signals)} signal(s)")
+                f"existing tests: base {report.base_existing_tests.status}, head {report.baseline_tests.status}; "
+                f"{len(report.deterministic_signals)} signal(s)")
 
     catalog = build_catalog(index, scenario.harness)
     has_deps = bool(changed_dependencies(before, after))
@@ -153,10 +158,11 @@ def _run(run_id: str, store: RunStore) -> None:
     store.stage(run_id, "plan", "done")
 
     store.stage(run_id, "verify", "running")
-    _verify(report, scenario, catalog)
+    _verify(report, scenario, catalog, base_index, index)
     store.publish(run_id, report)
     store.stage(run_id, "verify", "done",
-                f"{sum(1 for r in report.risks if r.verification and r.verification.outcome != 'not_run')} test run(s)")
+                f"{len({(r.test_template, r.test_target) for r in report.risks if r.verification and r.verification.outcome != 'not_run'})} "
+                "test(s), each run on base and head")
 
     store.stage(run_id, "report", "running")
     finalize(report)
@@ -313,12 +319,14 @@ def _plan(report: Report, index: RepoIndex, catalog: TargetCatalog) -> None:
         risk.plan = VerificationPlan(source="model", expected_behavior=plan.expected_behavior, reason=plan.reason)
 
 
-def _verify(report: Report, scenario: Scenario, catalog: TargetCatalog) -> None:
+def _verify(report: Report, scenario: Scenario, catalog: TargetCatalog, base_index: RepoIndex,
+            head_index: RepoIndex) -> None:
     cache = {}
     for risk in report.risks:
         key = (risk.test_template, risk.test_target)
         if key not in cache:
-            cache[key] = run_verification(scenario.after_dir, catalog, *key)
+            cache[key] = run_verification(scenario.before_dir, scenario.after_dir, catalog, *key,
+                                          base_index=base_index, head_index=head_index)
         risk.verification = cache[key].model_copy(deep=True)
         risk.status = STATUS_FROM_OUTCOME[risk.verification.outcome]
 

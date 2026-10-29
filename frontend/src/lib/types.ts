@@ -69,21 +69,57 @@ export type Impact = {
   confidence: "high" | "medium" | "low";
 };
 
-export type Verification = {
-  template: string;
-  target: string;
-  outcome: "confirmed" | "not_reproduced" | "error" | "not_run";
+export type TestCase = { name: string; result: string; message: string; stdout?: string; time: number };
+
+export type RevisionRun = {
+  revision: "base" | "head";
+  outcome: "passed" | "violated" | "error";
   command: string;
   exit_code: number | null;
   stdout: string;
   stderr: string;
   duration_ms: number;
-  test_code: string;
-  test_cases: { name: string; result: string; message: string; time: number }[];
+  test_cases: TestCase[];
   note: string;
 };
 
-export type RiskStatus = "confirmed_by_test" | "not_reproduced" | "not_tested" | "test_error";
+export type RequirementEvidence = {
+  kind: "enforced_in_base" | "stated_in_base";
+  file: string;
+  line: number;
+  text: string;
+  reason: string;
+};
+
+export type DifferentialOutcome =
+  | "regression_confirmed"
+  | "behavior_changed"
+  | "fails_on_both"
+  | "fixed_on_head"
+  | "not_reproduced"
+  | "inconclusive"
+  | "not_run";
+
+export type Verification = {
+  template: string;
+  target: string;
+  outcome: DifferentialOutcome;
+  test_code: string;
+  test_sha256: string;
+  base: RevisionRun | null;
+  head: RevisionRun | null;
+  requirements: RequirementEvidence[];
+  caveats: string[];
+  note: string;
+};
+
+export type RiskStatus =
+  | "confirmed_by_test"
+  | "behavior_changed"
+  | "preexisting_issue"
+  | "not_reproduced"
+  | "not_tested"
+  | "test_error";
 
 export type Risk = {
   id: string;
@@ -129,6 +165,7 @@ export type Report = {
   graph: { nodes: GraphNode[]; edges: GraphEdge[] };
   static_checks: CommandResult[];
   baseline_tests: CommandResult | null;
+  base_existing_tests: CommandResult | null;
   deterministic_signals: DeterministicSignal[];
   model: ModelStatus;
   impacts: Impact[];

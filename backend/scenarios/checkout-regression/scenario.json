@@ -1,7 +1,7 @@
 {
   "id": "checkout-regression",
   "title": "Negative discount regression",
-  "description": "A pricing refactor lets flat coupons stack with percentage discounts and removes the clamp that kept discounted amounts at or above zero. Checkout and invoicing both depend on the changed function.",
+  "description": "A pricing change lets flat coupons stack with percentage discounts instead of replacing them, and drops the clamp that kept discounted amounts at or above zero. Checkout and invoicing both depend on the changed function.",
   "category": "regression",
   "harness": {},
   "expected": {"verdict": "issues_confirmed", "confirmed_templates": ["nonnegative_total"], "advisories": false}
