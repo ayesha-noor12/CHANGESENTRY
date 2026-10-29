@@ -4,25 +4,22 @@ Contract: a function that computes a monetary amount must never return a
 negative value for supported inputs. Percent-like parameters are drawn from
 the supported 0-100 range; amounts from non-negative values. A failing test
 lists the input combinations that produced a negative result.
+
+CASES is fixed when the test is rendered, so the base and head revisions are
+called with exactly the same arguments.
 """
 import importlib
-import inspect
-import itertools
 
 TARGET_MODULE = $module
 TARGET_FUNCTION = $function
-PERCENT_VALUES = [0.0, 50.0, 100.0]
-AMOUNT_VALUES = [0.0, 10.0, 25.0, 100.0]
+CASES = $cases
 MARKER = "CHANGESENTRY_INVARIANT_VIOLATED"
 
 
 def test_total_is_never_negative():
     func = getattr(importlib.import_module(TARGET_MODULE), TARGET_FUNCTION)
-    names = list(inspect.signature(func).parameters)
-    grids = [PERCENT_VALUES if ("percent" in n or "rate" in n) else AMOUNT_VALUES for n in names]
     violations, checked = [], 0
-    for combo in itertools.product(*grids):
-        kwargs = dict(zip(names, combo))
+    for kwargs in CASES:
         result = func(**kwargs)
         checked += 1
         if result < 0:

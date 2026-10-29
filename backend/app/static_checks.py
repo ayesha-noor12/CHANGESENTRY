@@ -52,12 +52,12 @@ def run_bandit(workspace: Path, python_files: list[str]) -> CommandResult:
     return result
 
 
-def run_existing_tests(workspace: Path) -> CommandResult:
+def run_existing_tests(workspace: Path, name: str = "existing tests") -> CommandResult:
     if not (workspace / "tests").is_dir():
-        return CommandResult(name="existing tests", command="pytest", status="not_run",
+        return CommandResult(name=name, command="pytest", status="not_run",
                              summary="repository has no tests/ directory")
     result, code = run_command(
-        "existing tests",
+        name,
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
         workspace, CHECK_TIMEOUT_SECONDS,
     )

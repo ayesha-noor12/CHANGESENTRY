@@ -12,3 +12,7 @@ def test_discount_applies_before_tax():
 
 def test_invoice_line_formats_net_amount():
     assert invoice_line("Mug", 10.0, 50) == "Mug: 5.00"
+
+
+def test_coupon_reduces_total():
+    assert checkout_total(100.0, coupon_amount=10) == 97.2

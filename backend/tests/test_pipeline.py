@@ -16,6 +16,13 @@ def _load(scenario_id, version="after"):
     return s, index, changes
 
 
+def _differential(scenario_id, template, target):
+    s, head, _ = _load(scenario_id)
+    _, base, _ = _load(scenario_id, "before")
+    return run_verification(s.before_dir, s.after_dir, build_catalog(head, s.harness), template, target,
+                            base_index=base, head_index=head)
+
+
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     for key in ("NEBIUS_API_KEY", "NEBIUS_BASE_URL", "NEBIUS_MODEL", "TAVILY_API_KEY"):
@@ -46,31 +53,44 @@ def test_guard_consistency_flags_only_the_unguarded_route():
     assert guard_consistency(index, changed) == []
 
 
-def test_auth_guard_template_confirms_and_does_not_overclaim():
-    s, index, _ = _load("auth-boundary")
-    catalog = build_catalog(index, s.harness)
-    webhook = run_verification(s.after_dir, catalog, "auth_guard", "POST /webhooks/payment-provider")
-    assert webhook.outcome == "confirmed", webhook.stdout
-    admin = run_verification(s.after_dir, catalog, "auth_guard", "POST /admin/orders/refund")
-    assert admin.outcome == "not_reproduced", admin.stdout
+def test_auth_guard_passes_on_base_and_fails_on_head():
+    webhook = _differential("auth-boundary", "auth_guard", "POST /webhooks/payment-provider")
+    assert (webhook.base.outcome, webhook.head.outcome) == ("passed", "violated"), webhook.head.stdout
+    assert webhook.outcome == "regression_confirmed"
+    assert any(e.file == "app/routes/admin.py" and "require_admin" in e.text for e in webhook.requirements)
+    assert webhook.caveats and "does not exist in the base revision" in webhook.caveats[0]
+    admin = _differential("auth-boundary", "auth_guard", "POST /admin/orders/refund")
+    assert admin.outcome == "not_reproduced", admin.head.stdout
 
 
-def test_nonnegative_template_detects_regression_only_after_change():
-    s, after_index, _ = _load("checkout-regression")
-    after = run_verification(s.after_dir, build_catalog(after_index, s.harness), "nonnegative_total",
-                             "shop.checkout:checkout_total")
-    assert after.outcome == "confirmed", after.stdout
-    _, before_index, _ = _load("checkout-regression", "before")
-    before = run_verification(s.before_dir, build_catalog(before_index, s.harness), "nonnegative_total",
-                              "shop.checkout:checkout_total")
-    assert before.outcome == "not_reproduced", before.stdout
+def test_nonnegative_runs_identical_inputs_on_both_revisions():
+    result = _differential("checkout-regression", "nonnegative_total", "shop.checkout:checkout_total")
+    assert (result.base.outcome, result.head.outcome) == ("passed", "violated"), result.base.stdout
+    assert result.outcome == "regression_confirmed"
+    assert any(e.file == "docs/pricing.md" for e in result.requirements)
+    checked = [line for run in (result.base, result.head) for line in run.stdout.splitlines()
+               if line.startswith("shop.checkout.checkout_total: checked")]
+    assert len(checked) == 2 and checked[0].split(",")[0] == checked[1].split(",")[0]
+
+
+def test_classification_needs_a_base_requirement_to_confirm():
+    from app.models import RevisionRun
+    from app.test_runner import classify
+    passed, violated, error = (RevisionRun(revision="base", outcome=o) for o in ("passed", "violated", "error"))
+    assert classify(passed, violated, True)[0] == "regression_confirmed"
+    assert classify(passed, violated, False)[0] == "behavior_changed"
+    assert classify(violated, violated, True)[0] == "fails_on_both"
+    assert classify(violated, passed, True)[0] == "fixed_on_head"
+    assert classify(passed, passed, True)[0] == "not_reproduced"
+    assert classify(error, violated, True)[0] == "inconclusive"
 
 
 def test_unapproved_target_is_never_executed():
     s, index, _ = _load("auth-boundary")
     catalog = build_catalog(index, s.harness)
-    result = run_verification(s.after_dir, catalog, "auth_guard", "POST /anything; rm -rf /")
-    assert result.outcome == "not_run" and result.command == ""
+    result = run_verification(s.before_dir, s.after_dir, catalog, "auth_guard", "POST /anything; rm -rf /",
+                              base_index=index, head_index=index)
+    assert result.outcome == "not_run" and result.base is None and result.head is None
 
 
 def test_validation_rejects_invented_files_and_targets():

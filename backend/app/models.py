@@ -130,17 +130,49 @@ class VerificationPlan(BaseModel):
     reason: str = ""
 
 
-class Verification(BaseModel):
-    template: str
-    target: str
-    outcome: Literal["confirmed", "not_reproduced", "error", "not_run"]
+class RevisionRun(BaseModel):
+    """One execution of the verification test against one revision."""
+    revision: Literal["base", "head"]
+    outcome: Literal["passed", "violated", "error"]
     command: str = ""
     exit_code: Optional[int] = None
     stdout: str = ""
     stderr: str = ""
     duration_ms: int = 0
-    test_code: str = ""
     test_cases: list[dict] = Field(default_factory=list)
+    note: str = ""
+
+
+class RequirementEvidence(BaseModel):
+    """Base-revision evidence that the tested invariant was already a requirement."""
+    kind: Literal["enforced_in_base", "stated_in_base"]
+    file: str
+    line: int
+    text: str
+    reason: str
+
+
+DifferentialOutcome = Literal[
+    "regression_confirmed",  # base passes, head violates, requirement established in base
+    "behavior_changed",      # base passes, head violates, no independent requirement found
+    "fails_on_both",         # pre-existing issue, invalid test or incompatible assumption
+    "fixed_on_head",         # base violates, head passes: possible improvement or intentional change
+    "not_reproduced",        # passes on both revisions
+    "inconclusive",          # at least one revision could not run to a conclusive result
+    "not_run",
+]
+
+
+class Verification(BaseModel):
+    template: str
+    target: str
+    outcome: DifferentialOutcome
+    test_code: str = ""
+    test_sha256: str = ""
+    base: Optional[RevisionRun] = None
+    head: Optional[RevisionRun] = None
+    requirements: list[RequirementEvidence] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
     note: str = ""
 
 
@@ -154,7 +186,8 @@ class Risk(BaseModel):
     line: Optional[int] = None
     evidence: str
     explanation: str
-    status: Literal["confirmed_by_test", "not_reproduced", "not_tested", "test_error"] = "not_tested"
+    status: Literal["confirmed_by_test", "behavior_changed", "preexisting_issue", "not_reproduced",
+                    "not_tested", "test_error"] = "not_tested"
     test_template: TemplateId = "none"
     test_target: str = ""
     validation_notes: list[str] = Field(default_factory=list)
@@ -200,7 +233,8 @@ class Report(BaseModel):
     changed_files: list[ChangedFile] = Field(default_factory=list)
     graph: ImpactGraph = Field(default_factory=lambda: ImpactGraph(nodes=[], edges=[]))
     static_checks: list[CommandResult] = Field(default_factory=list)
-    baseline_tests: Optional[CommandResult] = None
+    baseline_tests: Optional[CommandResult] = None       # existing suite on the head revision
+    base_existing_tests: Optional[CommandResult] = None  # the same suite on the base revision
     deterministic_signals: list[DeterministicSignal] = Field(default_factory=list)
     model: ModelStatus = Field(default_factory=lambda: ModelStatus(status="skipped"))
     impacts: list[ModelImpact] = Field(default_factory=list)
