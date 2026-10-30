@@ -73,7 +73,7 @@ async function runSetup(context: vscode.ExtensionContext, log: vscode.OutputChan
     return true;
   } catch (err) {
     log.show(true);
-    vscode.window.showErrorMessage(`ChangeSentry setup failed: ${(err as Error).message}. Python 3.10+ must be installed.`);
+    vscode.window.showErrorMessage(`ChangeSentry setup failed: ${(err as Error).message}`);
     return false;
   }
 }

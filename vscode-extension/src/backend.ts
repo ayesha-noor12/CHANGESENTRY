@@ -1,5 +1,5 @@
 // Locates the Python backend and runs `python -m app.cli` on the developer's own repository.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as vscode from "vscode";
@@ -44,14 +44,41 @@ function run(command: string, args: string[], options: { cwd?: string; env?: Nod
   });
 }
 
+const MIN_PYTHON: [number, number] = [3, 10];
+
+/** The first Python 3.10+ found, newest names first; macOS's built-in python3 is often 3.9 and is skipped. */
+async function findPython(log: vscode.OutputChannel): Promise<string> {
+  const names = process.platform === "win32"
+    ? ["python", "python3", "py"]
+    : ["python3.13", "python3.12", "python3.11", "python3.10", "python3",
+       "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"];
+  const seen: string[] = [];
+  for (const name of names) {
+    const version = await new Promise<string | undefined>((resolve) => {
+      execFile(name, ["-c", "import sys; print('%d.%d' % sys.version_info[:2])"], { timeout: 10000 },
+        (err, stdout) => resolve(err ? undefined : stdout.trim()));
+    });
+    if (!version) continue;
+    seen.push(`${name} (${version})`);
+    const [major, minor] = version.split(".").map(Number);
+    if (major > MIN_PYTHON[0] || (major === MIN_PYTHON[0] && minor >= MIN_PYTHON[1])) {
+      log.appendLine(`Using ${name} (Python ${version}) for the ChangeSentry environment`);
+      return name;
+    }
+  }
+  throw new BackendError(
+    `ChangeSentry needs Python 3.10 or newer. Found: ${seen.join(", ") || "no Python"}. `
+    + "Install it from https://www.python.org/downloads/ (or 'brew install python'), then run 'ChangeSentry: Set up Python environment'.");
+}
+
 /** Create a private virtual environment in the extension's storage and install the backend requirements. */
 export async function setupPython(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<string> {
   const venv = join(context.globalStorageUri.fsPath, "venv");
   const requirements = join(backendPath(context), "requirements.txt");
   if (!existsSync(requirements)) throw new BackendError(`requirements.txt not found in ${backendPath(context)}`);
   await vscode.workspace.fs.createDirectory(context.globalStorageUri);
-  const base = process.platform === "win32" ? "python" : "python3";
-  await run(base, ["-m", "venv", venv], {}, log);
+  const base = await findPython(log);
+  await run(base, ["-m", "venv", "--clear", venv], {}, log);
   const python = managedPython(context);
   await run(python, ["-m", "pip", "install", "--disable-pip-version-check", "-r", requirements], {}, log);
   return python;
