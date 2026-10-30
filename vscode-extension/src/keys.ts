@@ -24,6 +24,13 @@ export async function hasNebiusKey(context: vscode.ExtensionContext): Promise<bo
 }
 
 export async function setKey(context: vscode.ExtensionContext, key: string): Promise<boolean> {
+  if (key === NEBIUS_KEY) {
+    const pasted = await pasteNebiusKey(await context.secrets.get(NEBIUS_KEY), LABELS[NEBIUS_KEY]);
+    if (pasted === undefined || pasted === "keep") return pasted === "keep";
+    await context.secrets.store(NEBIUS_KEY, pasted);
+    vscode.window.showInformationMessage(`${LABELS[NEBIUS_KEY]} saved. Nebius accepted it.`);
+    return true;
+  }
   const value = await vscode.window.showInputBox({
     title: LABELS[key],
     prompt: "Stored in VS Code's encrypted secret storage. Leave empty to remove it.",
@@ -38,6 +45,64 @@ export async function setKey(context: vscode.ExtensionContext, key: string): Pro
   return Boolean(cleaned);
 }
 
+/** First and last characters and the length, so a pasted key can be compared without revealing it. */
+function fingerprint(key: string): string {
+  return key.length > 12 ? `${key.length} characters, ${key.slice(0, 6)}…${key.slice(-4)}` : `${key.length} characters`;
+}
+
+/**
+ * Paste box for the Nebius key that checks the key with Nebius before accepting it.
+ * Resolves to the verified key, "keep" (empty answer with a key already saved), or undefined (cancelled).
+ */
+function pasteNebiusKey(current: string | undefined, title: string): Promise<string | "keep" | undefined> {
+  return new Promise((resolve) => {
+    const box = vscode.window.createInputBox();
+    box.title = title;
+    box.password = true;
+    box.ignoreFocusOut = true;
+    box.placeholder = current ? "•••••••• (saved). Paste a new key, or press Enter to keep it" : "Paste your Nebius Token Factory API key";
+    box.prompt = "Press Enter: the key is checked with Nebius before it is saved. Use the eye button to see what you pasted.";
+    box.buttons = [{ iconPath: new vscode.ThemeIcon("eye"), tooltip: "Show or hide the key" }];
+    let unverifiedOk = false;
+    let settled = false;
+    const finish = (value: string | "keep" | undefined) => {
+      settled = true;
+      resolve(value);
+      box.dispose();
+    };
+    box.onDidTriggerButton(() => (box.password = !box.password));
+    box.onDidChangeValue(() => {
+      box.validationMessage = undefined;
+      unverifiedOk = false;
+    });
+    box.onDidHide(() => !settled && finish(undefined));
+    box.onDidAccept(async () => {
+      const key = cleanKey(box.value);
+      if (!key) {
+        if (current) return finish("keep");
+        box.validationMessage = "Paste the Nebius key first.";
+        return;
+      }
+      if (unverifiedOk) return finish(key);
+      box.busy = true;
+      box.enabled = false;
+      box.validationMessage = undefined;
+      const result = await checkKey(key);
+      box.busy = false;
+      box.enabled = true;
+      if (result.state === "ok") return finish(key);
+      if (result.state === "unauthorized") {
+        box.validationMessage = `Nebius rejected this key (401). You pasted ${fingerprint(key)}. `
+          + "Copy the complete key again (from the Nebius Token Factory console) and paste it here.";
+      } else if (result.state === "error") {
+        box.validationMessage = `Could not check the key: ${result.message}. Press Enter again to save it without checking.`;
+        unverifiedOk = true;
+      }
+    });
+    box.show();
+  });
+}
+
 /** Ask for the Nebius key, then the Tavily key; an empty answer keeps the current value. Then test Nebius. */
 export async function enterKeys(context: vscode.ExtensionContext): Promise<boolean> {
   const steps: { key: string; required: boolean }[] = [
@@ -47,8 +112,18 @@ export async function enterKeys(context: vscode.ExtensionContext): Promise<boole
   const saved: string[] = [];
   for (const [i, step] of steps.entries()) {
     const current = await context.secrets.get(step.key);
+    const title = `ChangeSentry API keys (${i + 1}/${steps.length}): ${LABELS[step.key]}`;
+    if (step.key === NEBIUS_KEY) {
+      const pasted = await pasteNebiusKey(current, title);
+      if (pasted === undefined) break;
+      if (pasted !== "keep") {
+        await context.secrets.store(NEBIUS_KEY, pasted);
+        saved.push(`${LABELS[NEBIUS_KEY]} (accepted by Nebius)`);
+      }
+      continue;
+    }
     const value = await vscode.window.showInputBox({
-      title: `ChangeSentry API keys (${i + 1}/${steps.length}): ${LABELS[step.key]}`,
+      title,
       prompt: current
         ? "A key is already saved. Paste a new one to replace it, or press Enter to keep it."
         : step.required
@@ -179,7 +254,10 @@ export type NebiusCheck =
 /** Ask Nebius which models the saved key can use. No UI, so it can run before every check. */
 export async function checkNebius(context: vscode.ExtensionContext): Promise<NebiusCheck> {
   const key = await context.secrets.get(NEBIUS_KEY);
-  if (!key) return { state: "no_key" };
+  return key ? checkKey(key) : { state: "no_key" };
+}
+
+async function checkKey(key: string): Promise<NebiusCheck> {
   const base = (vscode.workspace.getConfiguration("changesentry").get<string>("nebiusBaseUrl") ?? "").replace(/\/+$/, "");
   try {
     const response = await fetch(`${base}/models`, {
