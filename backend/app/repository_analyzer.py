@@ -18,6 +18,7 @@ GUARD_PATTERN = re.compile(r"^(require|check|verify|ensure|authorize|authenticat
 NUMERIC_ANNOTATIONS = {"float", "int"}
 MAX_GRAPH_DEPTH = 3
 MAX_GRAPH_NODES = 40
+MAX_FILE_BYTES = 512 * 1024
 
 
 def read_tree(root: Path) -> dict[str, str]:
@@ -25,7 +26,12 @@ def read_tree(root: Path) -> dict[str, str]:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or "__pycache__" in path.parts or path.suffix not in TEXT_SUFFIXES:
             continue
-        files[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+        if path.stat().st_size > MAX_FILE_BYTES:
+            continue
+        try:
+            files[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:  # real repositories can contain non-UTF-8 text files
+            continue
     return files
 
 

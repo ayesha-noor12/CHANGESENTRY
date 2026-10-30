@@ -2,140 +2,200 @@
 
 **Don't just predict what a code change might break. Prove it before it reaches production.**
 
-A few changed lines can break behaviour elsewhere in a repository, and reviewing only the changed lines can miss that. ChangeSentry follows a change through the rest of the code, asks an **NVIDIA Nemotron** model (through **Nebius Token Factory**) what it might break, and then tests that hypothesis: it runs **the same test against the code before and after the change** and reports what actually happened.
+Built with **NVIDIA Nemotron** · served by **Nebius Token Factory** · advisories from **Tavily** and **OSV** · runs in **VS Code**
 
-A finding is reported as a **confirmed regression** only when both of these hold:
+![How ChangeSentry proves a regression](docs/images/architecture.png)
+
+---
+
+## The problem, in one example
+
+A developer lets discount coupons stack with percentage promotions. The new feature works, and **every existing test still passes**, so the change gets merged. But the change also deleted the line that kept a price from going below zero. A $0 item with a $10 coupon now costs **−$10**.
+
+An AI reviewer might say "this *could* produce negative prices". That's a guess, and developers learn to ignore guesses.
+
+**ChangeSentry proves it.** It runs the *same* test, with the *same* 48 inputs, on the code before and after the change:
+
+| | Before the change (base) | After the change (head) |
+|---|---|---|
+| Test result | ✅ **PASS**: 0 of 48 prices negative | ❌ **FAIL**: 27 of 48 negative, e.g. `-10.0` |
+
+It then checks that "never negative" was a real rule *before* the change, and finds it in the project's own `docs/pricing.md`. Passes before, fails after, breaks a documented rule: **a confirmed regression, not an AI opinion.**
+
+## What makes it different
+
+ChangeSentry reports a **confirmed regression** only when both of these hold:
 
 1. The identical test **passes on the base revision and fails on the head revision**.
-2. The **base revision itself** states or enforces the behaviour the test checks. This evidence is found by deterministic rules, not by the model.
+2. The **base revision itself** states or enforces the tested behaviour. This is found by deterministic rules, never by the model.
 
-Everything else is labelled for what it is: a behaviour change, a pre-existing failure, not reproduced, or not tested. The report also lists the checks that were *not* performed.
+Everything else is labelled for what it is: *behaviour changed*, *fails on both*, *not reproduced*, *inconclusive* or *not tested*. Every report also lists the checks that were **not** performed.
+
+<p align="center"><img src="docs/images/vscode-report.png" width="560" alt="ChangeSentry report in VS Code: base PASS, head FAIL on the same 48 inputs"></p>
+
+*The report in VS Code: the identical test passes on the base commit and fails on the head commit, with the counterexamples and the failed assertion.*
+
+---
+
+## How we use NVIDIA Nemotron and Nebius Token Factory
+
+Nemotron is the investigator. It decides **what is worth testing**, and ChangeSentry turns that decision into executable proof.
+
+| Role | What Nemotron does | Where |
+|---|---|---|
+| **1. Hypothesis** | Reads the git diff, the impact-graph edges, source excerpts of every connected function, the `ruff`/`bandit` output, the existing test results and the list of valid test targets. It returns structured risks: what might break, why, and with which evidence | [`prompts.py`](backend/app/prompts.py) `ANALYSIS_TEMPLATE` |
+| **2. Verification plan** | For each risk (up to 3, in parallel), picks the test template and target, and states the expected behaviour | [`prompts.py`](backend/app/prompts.py) `PLAN_TEMPLATE`, [`pipeline.py`](backend/app/pipeline.py) |
+
+**It makes a measurable difference.** In the checkout scenario, no deterministic rule spots the bug. Without Nemotron, ChangeSentry honestly reports *"No issue detected; model analysis did not complete"*. With Nemotron, it proposes the non-negative check on `apply_discount`, and the base/head test **confirms the regression**.
+
+**The model is used safely:**
+- **Structured output only:** responses must be JSON, validated with Pydantic, with one bounded retry if invalid.
+- **Grounded:** the backend rejects any risk that cites an unknown file, a line outside the file, or a test target that doesn't exist in the AST index, and shows the rejections in the report.
+- **No code from the model is ever executed.** Nemotron only picks a template id and a target from an approved list. The backend fills the template itself.
+- **Honest failure:** if a call fails, the report says *"model analysis did not complete"*. Nothing is invented to fill the gap.
+
+**Served through Nebius Token Factory** ([`nemotron_client.py`](backend/app/nemotron_client.py)):
+- Uses Token Factory's OpenAI-compatible endpoint, with `nvidia/nemotron-3-super-120b-a12b` at temperature 0.1 for repeatable analysis.
+- The model id is configurable. `python -m scripts.check_nebius` lists the Nemotron models your key can use.
+- The VS Code extension checks your key against Token Factory's `/models` endpoint before every run. A rejected key is caught up front, not halfway through an analysis.
+
+## How we use Tavily (and OSV)
+
+When a change adds or re-pins a dependency ([`advisory_search.py`](backend/app/advisory_search.py)), two sources are queried, and the report keeps their strength of evidence separate:
+
+| Source | Query | Treated as |
+|---|---|---|
+| **OSV** | An exact package and version lookup | **Verified**: "this version is listed as affected" |
+| **Tavily** | `"<package>" "<version>" security advisory CVE affected versions`, restricted to advisory domains (osv.dev, nvd.nist.gov, github.com, security.snyk.io, pypi.org), top 5 results | **Leads**: titles, links and snippets for a human to read, never proof |
+
+In the `auth-boundary` scenario, the change adds `PyJWT==1.7.1`. OSV lists that exact version as affected (GHSA-2gx3-rcp4-g85q and others). Tavily returns related PyJWT advisory pages from GitHub and OSV, which is useful reading but not all specific to 1.7.1. That is why they are shown as leads. Tavily rate limits and rejected keys are reported in the report, not hidden.
+
+---
 
 ## Measured results
 
-These are the results of `python -m scripts.run_eval` with the real Nemotron model (`nvidia/nemotron-3-super-120b-a12b`) on 29 October 2026. The base and head outcomes were identical on every run in which the model call succeeded (see [Limits](#limits) for the one that did not).
+From `python -m scripts.run_eval` with the real Nemotron model on 29 October 2026, and repeated through the VS Code extension on real git repositories.
 
 | Scenario | Base | Head | Conclusion | Requirement found in the base revision |
 |---|---|---|---|---|
-| `checkout-regression` | PASS: 48 input combinations, 0 negative | FAIL: the same 48 combinations, 27 negative (for example, `apply_discount(subtotal=0, percent=0, coupon_amount=10) = -10.0`) | **Regression confirmed** | `docs/pricing.md:4`: "A checkout total must never be negative." It is also stated in the docstrings of `shop/pricing.py` and `shop/checkout.py` |
-| `auth-boundary` | PASS: anonymous and customer callers get 404 | FAIL: both callers get HTTP 200 and a refund is issued | **Regression confirmed**, with a caveat (see [Limits](#limits)) | `app/routes/admin.py:9`: the existing refund route calls `require_admin` before `issue_refund` |
-| `safe-change` | Existing suite PASS (4 tests) | Existing suite PASS (4 tests) | **No regression detected by these tests.** No findings were raised | Not applicable |
+| **checkout-regression** | PASS: 48 inputs, 0 negative | FAIL: the same 48 inputs, 27 negative | ✅ **Regression confirmed** | `docs/pricing.md:4`: "A checkout total must never be negative." |
+| **auth-boundary** | PASS: the route returns 404 (it didn't exist yet) | FAIL: anonymous callers get HTTP 200 and a refund is issued | ✅ **Regression confirmed**, with the caveat [below](#limits) | `app/routes/admin.py:9`: the existing refund route calls `require_admin` first |
+| **safe-change** | Existing suite PASS (4 tests) | Existing suite PASS (4 tests) | ✅ **No regression detected**, no findings invented | Not applicable |
 
-In `auth-boundary`, OSV also lists the newly added `PyJWT==1.7.1` as an affected version, and Tavily returns advisory links for it.
+In every scenario the project's existing tests pass on both revisions. ChangeSentry's targeted test is what catches the problem.
 
-In each fixture the repository's existing tests pass on both revisions. The tests that ChangeSentry generates are the ones that catch the problem.
+## How it works
 
-## How differential verification works
+1. **Map the change.** Git diff plus Python `ast`: changed functions, their callers and callees up to 3 hops, and route decorators. Edges are marked *resolved* (through a static import) or *candidate* (matched by name only).
+2. **Deterministic checks.** `ruff` and `bandit` run on the changed files, and the project's own test suite runs on **both** revisions. A guard-consistency rule flags a new route that calls an operation every other route protects.
+3. **Hypothesis and plan:** Nemotron, as described above.
+4. **One test, two revisions.** The approved template is rendered **once**, with its inputs written in as literals. The identical file (SHA-256 shown) runs in disposable copies of base and head, with a timeout, a CPU limit, a memory limit where the OS allows it, and an environment stripped of API keys.
+5. **Classify:**
 
+   | Base | Head | Result |
+   |---|---|---|
+   | PASS | FAIL | **Confirmed regression** if base has the requirement, otherwise *behaviour changed* (may be intended) |
+   | FAIL | FAIL | *Fails on both*: a pre-existing issue or an invalid test |
+   | FAIL | PASS | *Fixed on head*: a possible improvement |
+   | PASS | PASS | *Not reproduced* |
+   | error | | *Inconclusive* |
+
+6. **Find the requirement in base** ([`expectations.py`](backend/app/expectations.py)): a written rule ("never negative") in docs, the README or the related modules, or an existing route that guards the same operation.
+7. **Report:** the verdict, base and head output side by side, the failed assertion, requirement citations as `file:line`, caveats, the test code and its hash, and the checks not performed.
+
+---
+
+## Try it
+
+### VS Code extension (recommended)
+
+```bash
+cd vscode-extension && npm install && npm run package    # builds changesentry-0.1.0.vsix
+code --install-extension changesentry-0.1.0.vsix
+cd ../backend && python -m scripts.make_demo_repo checkout-regression ~/changesentry-demo
 ```
-diff + AST graph → Nemotron hypothesis → validated test plan → render the test once
-      → run on base ─┐
-                     ├─ compare → look for the requirement in base → classify → report
-      → run on head ─┘
-```
 
-1. **One test, two revisions.** The backend fills an approved template, writing the inputs into the file as literal values, and renders it **once**. The identical file is written into disposable copies of the base and head revisions and run with the same fixed `pytest` command. The dashboard shows the file's SHA-256 so anyone can check that it is the same on both sides.
-2. **Classification** ([`test_runner.classify`](backend/app/test_runner.py)):
+1. Open `~/changesentry-demo` in VS Code.
+2. Run **ChangeSentry: Enter API keys**. It asks for the Nebius key, checks it with Nebius before saving, then asks for an optional Tavily key. Keys live in VS Code's encrypted secret storage. **ChangeSentry: Import API keys from .env file** works too.
+3. Click **🛡 ChangeSentry** in the status bar and choose **Last commit**, then **Previous commit**.
 
-   | Base | Head | Outcome | Shown as |
-   |---|---|---|---|
-   | PASS | FAIL | `regression_confirmed` if the base revision has a requirement, otherwise `behavior_changed` | Confirmed regression / Behaviour changed |
-   | FAIL | FAIL | `fails_on_both` (a pre-existing issue or an invalid test) | Fails on base too |
-   | FAIL | PASS | `fixed_on_head` (a possible improvement or intentional change) | Not reproduced |
-   | PASS | PASS | `not_reproduced` | Not reproduced |
-   | error on either | | `inconclusive` | Test error |
+The report opens beside your code, and the involved line gets a red underline and a **Problems** entry. The first run offers to install the Python backend into a private environment (Python 3.10+ required). You can also check **uncommitted changes** against your last commit, before you push.
 
-3. **Independent requirement** ([`expectations.py`](backend/app/expectations.py)). The requirement is searched for in the **base** revision only, with fixed rules:
-   - `auth_guard`: a base route that calls the same operation only after a `require_*` or auth guard, or the target route itself being guarded in base.
-   - `nonnegative_total`: a "never negative" or "never below zero" statement in `docs/`, the README, or the modules of the target and of its callers and callees.
+The same thing from the command line: `python -m app.cli --repo ~/changesentry-demo --base HEAD~1 --head HEAD`.
 
-   If nothing is found, a base-pass/head-fail result stays **"Behaviour changed"**, because the change may be intended.
-4. **Existing test suite on both revisions.** The repository's own `tests/` directory runs on base and on head. If it passes on base and fails on head, that also counts as a confirmed regression, because an existing test is an established requirement.
+### Web dashboard
 
-The model never supplies code or shell commands that get executed. It only picks a template id and a target, and the backend checks both against the AST index of the repository.
+The same analysis is also available as a web dashboard, with the diff, an interactive impact graph and the findings side by side.
 
-## Pipeline
-
-| Step | Module | What happens |
-|---|---|---|
-| Diff | `repository_analyzer.py` | Unified diff of a fixture's `before/` and `after/` trees, with changed line numbers |
-| AST index | `repository_analyzer.py` | Python `ast` for both revisions: imports, functions, direct calls, route decorators, request-payload keys |
-| Impact graph | `repository_analyzer.py` | Changed functions plus up to 3 hops of callers and callees. An edge is **resolved** when it goes through a static import and **candidate** when it is matched by name only |
-| Deterministic checks | `static_checks.py` | `ruff` and `bandit` on the changed files, and the existing `pytest` suite on base and head, each in a disposable copy |
-| Guard-consistency rule | `repository_analyzer.py` | Flags a changed route that calls a function which every other route guards with `require_*` or an auth check |
-| Model analysis | `nemotron_client.py`, `prompts.py` | Sends the diff, graph edges, source excerpts, tool output and the valid test targets. The model must return JSON, which is checked with Pydantic and retried once if invalid |
-| Validation | `pipeline.py` | Rejects unknown files, invalid lines, unsupported templates and targets that don't exist. The rejections appear in the report |
-| Verification planning | `pipeline.py` | A second Nemotron call per risk picks a template and target, which the backend validates again |
-| Advisories | `advisory_search.py` | For added or re-pinned dependencies: an **OSV** exact-version query (a verified match) and a **Tavily** search (leads only, never treated as proof) |
-| Differential test | `test_runner.py`, `expectations.py`, `sandbox.py` | Renders the test once, runs it on base and head with a timeout, a CPU limit, a memory limit where the OS allows it, and an environment stripped of secrets, then classifies the result |
-| Report | `report_builder.py` | Verdict, per-risk status, base and head results (command, exit code, per-test output, failed assertion), the requirement citations, the test code and its hash, and the checks not performed |
-
-## Run locally
-
-Requirements: Python 3.10+ (tested locally on 3.14; the Dockerfile uses 3.11) and Node 18+.
+![Web dashboard: diff, impact graph and base/head findings](docs/images/dashboard.png)
 
 ```bash
 # Backend
 cd backend
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env            # fill in NEBIUS_API_KEY, NEBIUS_MODEL, TAVILY_API_KEY
-python -m scripts.check_nebius  # lists the Nemotron model ids available to your key and sends a test call
+cp .env.example .env            # NEBIUS_API_KEY, NEBIUS_MODEL, TAVILY_API_KEY
+python -m scripts.check_nebius  # lists your Nemotron models and sends a test call
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (second terminal)
-cd frontend
-npm install
-cp .env.example .env.local      # BACKEND_URL=http://localhost:8000
-npm run dev                     # http://localhost:3000
+cd frontend && npm install && npm run dev   # http://localhost:3000
 ```
 
-Keys are read only by the backend. The browser talks to Next.js, which proxies `/api/*` to FastAPI (`next.config.mjs`), so no secret ever goes into a `NEXT_PUBLIC_*` variable.
+Keys are read only by the backend. Next.js proxies `/api/*` to FastAPI, so no secret ever reaches the browser.
 
-Without keys the app still runs. The deterministic checks and the base/head tests run, and the report states that Nemotron and Tavily were not called.
-
-### Reproduce the results
+### Reproduce the measured results
 
 ```bash
 cd backend
-pytest                      # offline: stubs the model and the network
-python -m scripts.run_eval  # all three scenarios end to end with your real keys
+pytest                      # 11 offline tests: the model and network are stubbed
+python -m scripts.run_eval  # all three scenarios end to end with your keys
 ```
-
-`run_eval` compares each run with the `expected` block in each `scenario.json` and prints, for every test, the base outcome, the head outcome, the classification, the number of base requirements found and the test hash:
-
 ```
 PASS checkout-regression: model=ok verdict=issues_confirmed risks=1 confirmed=['nonnegative_total']
      existing tests: base=passed (4 passed) head=passed (4 passed)
      nonnegative_total shop.pricing:apply_discount: base=passed head=violated -> regression_confirmed (3 base requirement(s), test sha256 8483e9fa0e8e)
 ```
 
-Nemotron does not always pick the same target, for example `apply_discount` or `checkout_total`. The conclusion is the same either way, but the test hash depends on the target.
+---
 
-## API
+## Project structure
+
+```
+backend/
+  app/pipeline.py           orchestration: diff → checks → Nemotron → validate → plan → base/head test → report
+  app/nemotron_client.py    Nebius Token Factory client (JSON-validated, one retry)
+  app/prompts.py            Nemotron prompts: analysis and verification plan
+  app/test_runner.py        renders the test once, runs it on base and head, classifies
+  app/expectations.py       finds the requirement in the base revision
+  app/advisory_search.py    OSV + Tavily dependency advisories
+  app/git_source.py, cli.py analyze two revisions of a local git repository
+  scenarios/                three demo projects (before/ and after/)
+vscode-extension/           the VS Code extension (TypeScript)
+frontend/                   the web dashboard (Next.js + React Flow)
+docs/images/                the images in this README
+```
+
+## API (web dashboard backend)
 
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/health` | Which integrations are configured (booleans and the model id, never keys) |
-| `GET` | `/api/scenarios` | The predefined scenarios |
-| `POST` | `/api/analyze` | `{"scenario_id": "checkout-regression"}` returns a run with `run_id`. Add `"wait": true` to block until the report is ready |
-| `GET` | `/api/analysis/{run_id}` | Stage progress, plus the report (partial while running) |
+| `GET` | `/api/scenarios` | The bundled scenarios |
+| `POST` | `/api/analyze` | `{"scenario_id": "checkout-regression"}`. Add `"wait": true` to block until done |
+| `GET` | `/api/analysis/{run_id}` | Stage progress and the report |
 
-Each risk's `verification` contains `base` and `head` runs, `outcome`, `requirements`, `caveats`, `test_code` and `test_sha256`. The schema is in `backend/app/models.py` and mirrored in `frontend/src/lib/types.ts`.
-
-## Deploy
-
-- **Backend**: `backend/Dockerfile` (listens on `$PORT`) works on Render, Railway, Fly.io and similar hosts. Set `NEBIUS_API_KEY`, `NEBIUS_BASE_URL`, `NEBIUS_MODEL`, `TAVILY_API_KEY` and `ALLOWED_ORIGINS` as service secrets.
-- **Frontend**: deploy `frontend/` to Vercel with `BACKEND_URL=https://<your-backend>`.
+The report schema is in [`backend/app/models.py`](backend/app/models.py).
 
 ## Limits
 
-- **The authorization baseline is weaker than the checkout one.** `POST /webhooks/payment-provider` is new, so on the base revision the router returns **404** and the test passes because the endpoint did not exist. That shows anonymous callers could not trigger a refund through this path before the change. It does **not** show that the change removed a guard from an existing route. The requirement comes from a *different* base route (`/admin/orders/refund`) that guards the same `issue_refund` operation. The report states this caveat next to the result. The checkout scenario has no such gap: both revisions have the same function signature and receive the same 48 inputs.
-- **Model failures make the analysis incomplete, not invented.** In our runs, one Nemotron call out of about a dozen on `safe-change` failed and we could not reproduce it. When that happens, the stage turns red, the verdict reads "model analysis did not complete", and the error appears in the Model tab and under *Checks not performed*. No finding is invented to fill the gap. The deterministic rules and the existing suite still run, and rerunning the scenario normally succeeds.
-- Only the three bundled fixtures can be analyzed. Arbitrary repositories and uploaded code are deliberately unsupported, and revisions are `before/` and `after/` folders rather than git commits.
-- Tests run as local processes with resource limits and a scrubbed environment, not in network-isolated containers. That is acceptable for the bundled fixtures only.
-- The call graph is static. Dynamic dispatch, reflection and framework wiring can hide relationships.
-- Only two test templates exist (`auth_guard`, `nonnegative_total`), and the requirement search uses fixed rules for each one. Behaviour outside their contracts is not tested.
+We'd rather state these than have you find them:
+
+- **The authorization baseline is weaker than the checkout one.** The new webhook route doesn't exist on the base revision, so base returns **404** and the test passes because the endpoint wasn't there. That shows anonymous callers couldn't trigger a refund through this path before; it does **not** show that a guard was removed from an existing route. The requirement comes from a *different* base route that guards the same refund operation, and the report shows this caveat next to the result.
+- **Model failures make the analysis incomplete, not invented.** In our runs, one Nemotron call out of about a dozen failed and we could not reproduce it. When that happens the report says so, and rerunning normally succeeds.
+- **Two verification templates today:** monetary non-negativity and route authorization. Risks outside them are shown as *Not tested*. Broader Nemotron-generated tests are the next step.
+- **Python and pytest only.** The call graph is static, so dynamic dispatch and framework wiring can hide relationships.
+- **Running a check executes the project's code,** as `pytest` would. That is why ChangeSentry runs locally in VS Code on your own code, and there is no hosted "paste any GitHub URL" mode. On a shared server, running strangers' code would expose the API keys and the machine.
 - Passing checks are evidence, not proof that a change is safe.
 
 ## License
