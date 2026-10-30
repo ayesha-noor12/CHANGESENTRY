@@ -19,7 +19,12 @@ Results:
 ## Setup
 
 - **Python backend.** The first run offers to create a private environment with the backend's requirements (Python 3.10+ must be installed). Or point `changesentry.pythonPath` to an interpreter that already has them.
-- **Keys.** Run **ChangeSentry: Set Nebius API key** and, optionally, **ChangeSentry: Set Tavily API key**. Keys are kept in VS Code's encrypted secret storage and are passed only to the local backend process, never to the tests it runs. Without a Nebius key, Nemotron analysis is skipped and the report says so.
+- **Keys.** Run **ChangeSentry: Configure API keys**, or click **ChangeSentry: key needed** in the status bar. From there you can:
+  - **import from a .env file** that has `NEBIUS_API_KEY` and `TAVILY_API_KEY` (and optionally `NEBIUS_MODEL`);
+  - enter each key by hand;
+  - **test the Nebius key**, which confirms it works and that the configured Nemotron model is available, and offers the available ones if not.
+
+  Keys are kept in VS Code's encrypted secret storage. They are passed only to the local backend process, never to the tests it runs. Without a Nebius key, Nemotron analysis is skipped and a banner at the top of the report says so.
 - **Settings:** `changesentry.nebiusModel` (default `nvidia/nemotron-3-super-120b-a12b`), `changesentry.nebiusBaseUrl`, `changesentry.backendPath`.
 - **Route checks.** For the `auth_guard` test, add `.changesentry.json` with `{"dispatch_module": "app.main"}` (the module that exposes `dispatch(method, path, body, user)`).
 

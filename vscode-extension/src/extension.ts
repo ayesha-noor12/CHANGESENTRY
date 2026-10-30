@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { analyze, BackendError, NEBIUS_KEY, pythonPath, setupPython, TAVILY_KEY } from "./backend";
+import { configureKeys, hasNebiusKey, importFromEnv, setKey, testNebius } from "./keys";
 import { ReportPanel } from "./reportPanel";
 import type { AnalysisRun, Risk } from "./types";
 
@@ -15,16 +16,19 @@ export function activate(context: vscode.ExtensionContext) {
   const log = vscode.window.createOutputChannel("ChangeSentry");
   const diagnostics = vscode.languages.createDiagnosticCollection("changesentry");
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  status.text = "$(shield) ChangeSentry";
-  status.tooltip = "Check my changes: run the same test on base and head";
-  status.command = "changesentry.checkChanges";
   status.show();
   context.subscriptions.push(log, diagnostics, status);
+  const refreshStatus = () => void updateStatus(context, status);
+  refreshStatus();
+  context.subscriptions.push(context.secrets.onDidChange(refreshStatus));
 
   const register = (id: string, fn: () => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
-  register("changesentry.setNebiusKey", () => storeSecret(context, NEBIUS_KEY, "Nebius Token Factory API key"));
-  register("changesentry.setTavilyKey", () => storeSecret(context, TAVILY_KEY, "Tavily API key"));
+  register("changesentry.configureKeys", () => configureKeys(context));
+  register("changesentry.setNebiusKey", () => setKey(context, NEBIUS_KEY));
+  register("changesentry.setTavilyKey", () => setKey(context, TAVILY_KEY));
+  register("changesentry.importKeys", () => importFromEnv(context));
+  register("changesentry.testNebiusKey", () => testNebius(context));
   register("changesentry.setupPython", () => runSetup(context, log));
   register("changesentry.showReport", () => {
     if (lastRun) ReportPanel.show(lastRun.run, lastRun.repo);
@@ -33,15 +37,21 @@ export function activate(context: vscode.ExtensionContext) {
   register("changesentry.checkChanges", () => checkChanges(context, log, diagnostics, status));
 }
 
-export function deactivate() {}
-
-async function storeSecret(context: vscode.ExtensionContext, key: string, label: string) {
-  const value = await vscode.window.showInputBox({ prompt: `${label} (stored in VS Code secret storage)`, password: true, ignoreFocusOut: true });
-  if (value === undefined) return;
-  if (value.trim()) await context.secrets.store(key, value.trim());
-  else await context.secrets.delete(key);
-  vscode.window.showInformationMessage(value.trim() ? `${label} saved.` : `${label} removed.`);
+async function updateStatus(context: vscode.ExtensionContext, status: vscode.StatusBarItem) {
+  if (await hasNebiusKey(context)) {
+    status.text = "$(shield) ChangeSentry";
+    status.tooltip = "Check my changes: run the same test on base and head";
+    status.command = "changesentry.checkChanges";
+    status.backgroundColor = undefined;
+  } else {
+    status.text = "$(key) ChangeSentry: key needed";
+    status.tooltip = "No Nebius API key set. Click to configure API keys.";
+    status.command = "changesentry.configureKeys";
+    status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+  }
 }
+
+export function deactivate() {}
 
 async function runSetup(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<boolean> {
   try {
@@ -114,11 +124,13 @@ async function checkChanges(
     }
     if (choice !== "Install now" || !(await runSetup(context, log))) return;
   }
-  if (!(await context.secrets.get(NEBIUS_KEY))) {
+  if (!(await hasNebiusKey(context))) {
     const choice = await vscode.window.showWarningMessage(
-      "No Nebius API key set: Nemotron analysis will be skipped (deterministic checks and tests still run).",
-      "Set key", "Continue without");
-    if (choice === "Set key") await storeSecret(context, NEBIUS_KEY, "Nebius Token Factory API key");
+      "No Nebius API key is set, so Nemotron cannot suggest what to test. Deterministic checks still run.",
+      { modal: true },
+      "Import from .env file…", "Enter key…", "Continue without");
+    if (choice === "Import from .env file…") await importFromEnv(context);
+    else if (choice === "Enter key…") await setKey(context, NEBIUS_KEY);
     else if (choice !== "Continue without") return;
   }
   const revisions = await pickRevisions(repo);
@@ -145,7 +157,7 @@ async function checkChanges(
     log.show(true);
     vscode.window.showErrorMessage(`ChangeSentry: ${(err as Error).message}`);
   } finally {
-    status.text = "$(shield) ChangeSentry";
+    await updateStatus(context, status);
   }
 }
 

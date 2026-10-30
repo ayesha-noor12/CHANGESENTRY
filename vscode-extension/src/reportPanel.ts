@@ -139,8 +139,16 @@ function body(run: AnalysisRun): string {
         ${a.osv_vulns.slice(0, 5).map((v) => `<a href="${esc(v.url)}">${esc(v.id)}</a>`).join(" ")}</li>`)
     .join("");
   const model = r.model;
+  const modelBanner = model.status === "not_configured"
+    ? `<div class="caveat"><strong>Nemotron was not used:</strong> no Nebius API key is set, so no AI hypotheses were tested.
+        Run <code>ChangeSentry: Configure API keys</code> (or click the key icon in the status bar), then check again.</div>`
+    : model.status === "error"
+      ? `<div class="caveat"><strong>Nemotron analysis did not complete:</strong> ${esc(model.error)}.
+          Nothing was invented to fill the gap. Run <code>ChangeSentry: Test Nebius API key</code>, then check again.</div>`
+      : "";
   return `
     <h2>${esc(r.scenario.title)}</h2>
+    ${modelBanner}
     ${verdict}
     ${suite}
     <div class="label">Changed files</div><ul class="plain">${changed || "<li class='muted'>none</li>"}</ul>

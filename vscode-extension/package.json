@@ -18,7 +18,8 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:.git"
+    "workspaceContains:.git",
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -31,6 +32,22 @@
       {
         "command": "changesentry.showReport",
         "title": "Show last report",
+        "category": "ChangeSentry"
+      },
+      {
+        "command": "changesentry.configureKeys",
+        "title": "Configure API keys",
+        "category": "ChangeSentry",
+        "icon": "$(key)"
+      },
+      {
+        "command": "changesentry.importKeys",
+        "title": "Import API keys from .env file",
+        "category": "ChangeSentry"
+      },
+      {
+        "command": "changesentry.testNebiusKey",
+        "title": "Test Nebius API key",
         "category": "ChangeSentry"
       },
       {
