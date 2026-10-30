@@ -8,6 +8,15 @@ const LABELS: Record<string, string> = {
   [TAVILY_KEY]: "Tavily API key",
 };
 
+/** Undo common paste mistakes: a NAME= prefix, surrounding quotes, spaces and line breaks. */
+export function cleanKey(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^(?:export\s+)?[A-Z_]+\s*=\s*/, "")
+    .replace(/^(['"])(.*)\1$/s, "$2")
+    .replace(/\s+/g, "");
+}
+
 export async function hasNebiusKey(context: vscode.ExtensionContext): Promise<boolean> {
   return Boolean(await context.secrets.get(NEBIUS_KEY));
 }
@@ -20,10 +29,11 @@ export async function setKey(context: vscode.ExtensionContext, key: string): Pro
     ignoreFocusOut: true,
   });
   if (value === undefined) return false;
-  if (value.trim()) await context.secrets.store(key, value.trim());
+  const cleaned = cleanKey(value);
+  if (cleaned) await context.secrets.store(key, cleaned);
   else await context.secrets.delete(key);
-  vscode.window.showInformationMessage(value.trim() ? `${LABELS[key]} saved.` : `${LABELS[key]} removed.`);
-  return Boolean(value.trim());
+  vscode.window.showInformationMessage(cleaned ? `${LABELS[key]} saved.` : `${LABELS[key]} removed.`);
+  return Boolean(cleaned);
 }
 
 /** Ask for the Nebius key, then the Tavily key; an empty answer keeps the current value. Then test Nebius. */
@@ -45,11 +55,11 @@ export async function enterKeys(context: vscode.ExtensionContext): Promise<boole
       placeHolder: current ? "•••••••• (saved)" : step.required ? "Paste your Nebius Token Factory key" : "Paste your Tavily key, or leave empty",
       password: true,
       ignoreFocusOut: true,
-      validateInput: (v) => (step.required && !current && !v.trim() ? "The Nebius key is required." : undefined),
+      validateInput: (v) => (step.required && !current && !cleanKey(v) ? "The Nebius key is required." : undefined),
     });
     if (value === undefined) break; // Escape stops the flow; keys entered so far stay saved
-    if (value.trim()) {
-      await context.secrets.store(step.key, value.trim());
+    if (cleanKey(value)) {
+      await context.secrets.store(step.key, cleanKey(value));
       saved.push(LABELS[step.key]);
     }
   }
@@ -78,7 +88,7 @@ export async function importFromEnv(context: vscode.ExtensionContext): Promise<b
   const values: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Z_]+)\s*=\s*(.*?)\s*$/);
-    if (match) values[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2");
+    if (match) values[match[1]] = cleanKey(match[2]);
   }
   const imported: string[] = [];
   if (values.NEBIUS_API_KEY) {
@@ -102,39 +112,75 @@ export async function importFromEnv(context: vscode.ExtensionContext): Promise<b
   return Boolean(values.NEBIUS_API_KEY);
 }
 
-/** List the models the key can use and confirm the configured Nemotron model is among them. */
-export async function testNebius(context: vscode.ExtensionContext): Promise<void> {
+export type NebiusCheck =
+  | { state: "ok"; models: string[] }
+  | { state: "no_key" }
+  | { state: "unauthorized" }
+  | { state: "error"; message: string };
+
+/** Ask Nebius which models the saved key can use. No UI, so it can run before every check. */
+export async function checkNebius(context: vscode.ExtensionContext): Promise<NebiusCheck> {
   const key = await context.secrets.get(NEBIUS_KEY);
-  if (!key) return void vscode.window.showWarningMessage("No Nebius API key is set.");
-  const config = vscode.workspace.getConfiguration("changesentry");
-  const base = (config.get<string>("nebiusBaseUrl") ?? "").replace(/\/+$/, "");
-  const model = config.get<string>("nebiusModel") ?? "";
+  if (!key) return { state: "no_key" };
+  const base = (vscode.workspace.getConfiguration("changesentry").get<string>("nebiusBaseUrl") ?? "").replace(/\/+$/, "");
   try {
-    const response = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "ChangeSentry: checking the Nebius key…" },
-      () => fetch(`${base}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20000) }),
-    );
-    if (response.status === 401 || response.status === 403) {
-      return void vscode.window.showErrorMessage("Nebius rejected the key (unauthorized). Set it again.");
-    }
-    if (!response.ok) return void vscode.window.showErrorMessage(`Nebius returned HTTP ${response.status}.`);
-    const ids = ((await response.json()) as { data?: { id: string }[] }).data?.map((m) => m.id) ?? [];
-    if (ids.includes(model)) {
-      vscode.window.showInformationMessage(`Nebius key works and ${model} is available.`);
-    } else {
-      const nemotron = ids.filter((id) => id.toLowerCase().includes("nemotron"));
-      const choice = await vscode.window.showWarningMessage(
-        `The key works, but ${model || "the configured model"} is not available to it.`,
-        ...(nemotron.length ? ["Choose a Nemotron model"] : []),
-      );
-      if (choice) {
-        const pick = await vscode.window.showQuickPick(nemotron, { title: "Nemotron models available to this key" });
-        if (pick) await config.update("nebiusModel", pick, vscode.ConfigurationTarget.Global);
-      }
-    }
+    const response = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (response.status === 401 || response.status === 403) return { state: "unauthorized" };
+    if (!response.ok) return { state: "error", message: `Nebius returned HTTP ${response.status}` };
+    const models = ((await response.json()) as { data?: { id: string }[] }).data?.map((m) => m.id) ?? [];
+    return { state: "ok", models };
   } catch (err) {
-    vscode.window.showErrorMessage(`Could not reach Nebius at ${base}: ${(err as Error).message}`);
+    return { state: "error", message: `could not reach Nebius at ${base}: ${(err as Error).message}` };
   }
+}
+
+/** Offer to replace a key that Nebius rejected. Returns true when a new key was saved. */
+export async function fixRejectedKey(context: vscode.ExtensionContext, message: string): Promise<boolean> {
+  const choice = await vscode.window.showErrorMessage(message, { modal: true }, "Enter API keys…", "Import from .env file…");
+  if (choice === "Enter API keys…") return enterKeys(context);
+  if (choice === "Import from .env file…") return importFromEnv(context);
+  return false;
+}
+
+/** List the models the key can use and confirm the configured Nemotron model is among them. */
+export async function testNebius(context: vscode.ExtensionContext): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration("changesentry");
+  const model = config.get<string>("nebiusModel") ?? "";
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "ChangeSentry: checking the Nebius key…" },
+    () => checkNebius(context),
+  );
+  if (result.state === "no_key") {
+    vscode.window.showWarningMessage("No Nebius API key is set.");
+    return false;
+  }
+  if (result.state === "unauthorized") {
+    await fixRejectedKey(context, "Nebius rejected the saved key (401 unauthorized). It may be incomplete or have extra characters. "
+      + "Importing it from your .env file avoids copy-paste mistakes.");
+    return false;
+  }
+  if (result.state === "error") {
+    vscode.window.showErrorMessage(`ChangeSentry: ${result.message}.`);
+    return false;
+  }
+  if (result.models.includes(model)) {
+    vscode.window.showInformationMessage(`Nebius key works and ${model} is available.`);
+    return true;
+  }
+  const nemotron = result.models.filter((id) => id.toLowerCase().includes("nemotron"));
+  const choice = await vscode.window.showWarningMessage(
+    `The key works, but ${model || "the configured model"} is not available to it.`,
+    ...(nemotron.length ? ["Choose a Nemotron model"] : []),
+  );
+  if (choice) {
+    const pick = await vscode.window.showQuickPick(nemotron, { title: "Nemotron models available to this key" });
+    if (pick) await config.update("nebiusModel", pick, vscode.ConfigurationTarget.Global);
+    return Boolean(pick);
+  }
+  return false;
 }
 
 /** One menu for everything key-related, showing what is currently set. */

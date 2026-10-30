@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { analyze, BackendError, NEBIUS_KEY, pythonPath, setupPython, TAVILY_KEY } from "./backend";
-import { configureKeys, enterKeys, hasNebiusKey, importFromEnv, setKey, testNebius } from "./keys";
+import { checkNebius, configureKeys, enterKeys, fixRejectedKey, hasNebiusKey, importFromEnv, setKey, testNebius } from "./keys";
 import { ReportPanel } from "./reportPanel";
 import type { AnalysisRun, Risk } from "./types";
 
@@ -166,6 +166,20 @@ async function checkChanges(
     if (choice === "Enter API keys…") await enterKeys(context);
     else if (choice === "Import from .env file…") await importFromEnv(context);
     else if (choice !== "Continue without") return;
+  }
+  // Catch a rejected key before spending a minute on an analysis that cannot use the model.
+  if (await hasNebiusKey(context)) {
+    const check = await checkNebius(context);
+    if (check.state === "unauthorized") {
+      const replaced = await fixRejectedKey(context,
+        "Nebius rejects the saved API key (401 unauthorized), so Nemotron cannot run. Replace it now? "
+        + "Choose Cancel to continue with deterministic checks only.");
+      if (replaced && (await checkNebius(context)).state === "unauthorized") {
+        return void vscode.window.showErrorMessage("Nebius still rejects the key. Check it in the Nebius Token Factory console.");
+      }
+    } else if (check.state === "error") {
+      log.appendLine(`Nebius pre-check: ${check.message}`);
+    }
   }
   const revisions = await pickRevisions(repo);
   if (!revisions) return;
