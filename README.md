@@ -6,6 +6,14 @@ Built with **NVIDIA Nemotron** · served by **Nebius Token Factory** · advisori
 
 ![How ChangeSentry proves a regression](docs/images/architecture.png)
 
+## Try it in 5 minutes
+
+1. **Download** [`ChangeSentry-test-kit.zip`](https://github.com/ayesha-noor12/CHANGESENTRY/releases/latest) from the latest release. It holds the VS Code extension, three demo repositories and a guide.
+2. **Install** `changesentry-0.1.0.vsix` in VS Code (**Extensions → … → Install from VSIX…**), then run **ChangeSentry: Enter API keys** with your [Nebius Token Factory](https://tokenfactory.nebius.com) key.
+3. **Open `demos/checkout`**, click **🛡 ChangeSentry** in the status bar, and choose **Last commit**, then **Previous commit**. Expected: base **PASS**, head **FAIL** (27 of 48 prices negative), **confirmed regression**.
+
+Full guide with the expected result for every demo: [docs/TESTING.md](docs/TESTING.md). Requires Python 3.10+, git and VS Code 1.90+.
+
 ---
 
 ## The problem, in one example
