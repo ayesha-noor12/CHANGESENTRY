@@ -81,6 +81,8 @@ export async function analyze(
     env.NEBIUS_MODEL = settings().get<string>("nebiusModel");
   }
   if (tavilyKey) env.TAVILY_API_KEY = tavilyKey;
+  log.appendLine(`Nebius key: ${nebiusKey ? "passed to the backend" : "NOT SET (Nemotron will be skipped)"} · ` +
+    `Tavily key: ${tavilyKey ? "passed to the backend" : "not set"} · model: ${settings().get<string>("nebiusModel")}`);
 
   const args = ["-m", "app.cli", "--repo", repo, "--base", base, "--head", head];
   log.appendLine(`$ ${python} ${args.join(" ")}`);

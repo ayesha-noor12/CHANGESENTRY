@@ -89,29 +89,53 @@ async function pickRepo(): Promise<vscode.WorkspaceFolder | undefined> {
   return vscode.window.showWorkspaceFolderPick({ placeHolder: "Which repository should ChangeSentry check?" });
 }
 
+async function commitOf(repo: string, ref: string): Promise<{ sha: string; text: string } | undefined> {
+  try {
+    const [sha, short, subject] = (await git(repo, "log", "-1", "--format=%H%x00%h%x00%s", `${ref}^{commit}`, "--")).split("\0");
+    return { sha, text: `${short} ${subject}` };
+  } catch {
+    return undefined;
+  }
+}
+
 async function pickRevisions(repo: string): Promise<{ base: string; head: string } | undefined> {
   const dirty = (await git(repo, "status", "--porcelain").catch(() => "")).length > 0;
+  const last = await commitOf(repo, "HEAD");
+  if (!last) return void vscode.window.showWarningMessage("This repository has no commits yet.");
   const headItems: (vscode.QuickPickItem & { ref: string })[] = [
-    { label: "Last commit", description: "HEAD", ref: "HEAD" },
-    { label: "Uncommitted changes", description: dirty ? "working tree (has changes)" : "working tree (clean)", ref: WORKTREE },
+    { label: "Last commit", description: last.text, ref: "HEAD" },
+    { label: "Uncommitted changes", description: dirty ? "working tree has changes" : "working tree is clean: nothing to check", ref: WORKTREE },
   ];
   if (dirty) headItems.reverse();
   const head = await vscode.window.showQuickPick(headItems, { title: "ChangeSentry (1/2): the changed code (head)" });
   if (!head) return;
-
-  const candidates: (vscode.QuickPickItem & { ref: string })[] = [];
-  if (head.ref === WORKTREE) candidates.push({ label: "Last commit", description: "HEAD", ref: "HEAD" });
-  candidates.push({ label: "Previous commit", description: "HEAD~1", ref: "HEAD~1" });
-  for (const branch of ["main", "master", "origin/main", "origin/master"]) {
-    if (await git(repo, "rev-parse", "--verify", "--quiet", `${branch}^{commit}`).then(() => true, () => false)) {
-      candidates.push({ label: `Branch ${branch}`, description: branch, ref: branch });
-    }
+  if (head.ref === WORKTREE && !dirty) {
+    return void vscode.window.showWarningMessage("There are no uncommitted changes. Pick 'Last commit' instead.");
   }
+
+  // Offer only bases that differ from the head; comparing a commit with itself finds nothing.
+  const offered = new Set<string>();
+  const candidates: (vscode.QuickPickItem & { ref: string })[] = [];
+  const add = async (label: string, ref: string) => {
+    const commit = await commitOf(repo, ref);
+    if (!commit || offered.has(commit.sha) || (head.ref === "HEAD" && commit.sha === last.sha)) return;
+    offered.add(commit.sha);
+    candidates.push({ label, description: `${ref} · ${commit.text}`, ref });
+  };
+  if (head.ref === WORKTREE) await add("Last commit", "HEAD");
+  await add("Previous commit", "HEAD~1");
+  for (const branch of ["main", "master", "origin/main", "origin/master"]) await add(`Branch ${branch}`, branch);
   candidates.push({ label: "Other commit or branch…", ref: "" });
   const base = await vscode.window.showQuickPick(candidates, { title: "ChangeSentry (2/2): the original code to compare against (base)" });
   if (!base) return;
   const ref = base.ref || (await vscode.window.showInputBox({ prompt: "Base commit, tag or branch", placeHolder: "e.g. v1.2.0 or a1b2c3d" }));
-  return ref ? { base: ref, head: head.ref } : undefined;
+  if (!ref) return;
+  const chosen = await commitOf(repo, ref);
+  if (!chosen) return void vscode.window.showWarningMessage(`'${ref}' is not a commit in this repository.`);
+  if (head.ref === "HEAD" && chosen.sha === last.sha) {
+    return void vscode.window.showWarningMessage(`'${ref}' is the same commit as the head, so there is nothing to compare.`);
+  }
+  return { base: ref, head: head.ref };
 }
 
 async function checkChanges(
@@ -159,6 +183,9 @@ async function checkChanges(
       },
     );
     lastRun = { run, repo: folder.uri };
+    const model = run.report?.model;
+    log.appendLine(`Model: ${model?.model ?? "none"} · ${model?.status ?? "no report"}${model?.error ? ` · ${model.error}` : ""}`);
+    log.appendLine(`Verdict: ${run.report?.verdict?.headline ?? run.error ?? "none"}`);
     showDiagnostics(run, folder.uri, diagnostics, revisions.head);
     ReportPanel.show(run, folder.uri);
     announce(run);
