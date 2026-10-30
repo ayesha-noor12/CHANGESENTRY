@@ -26,6 +26,39 @@ export async function setKey(context: vscode.ExtensionContext, key: string): Pro
   return Boolean(value.trim());
 }
 
+/** Ask for the Nebius key, then the Tavily key; an empty answer keeps the current value. Then test Nebius. */
+export async function enterKeys(context: vscode.ExtensionContext): Promise<boolean> {
+  const steps: { key: string; required: boolean }[] = [
+    { key: NEBIUS_KEY, required: true },
+    { key: TAVILY_KEY, required: false },
+  ];
+  const saved: string[] = [];
+  for (const [i, step] of steps.entries()) {
+    const current = await context.secrets.get(step.key);
+    const value = await vscode.window.showInputBox({
+      title: `ChangeSentry API keys (${i + 1}/${steps.length}): ${LABELS[step.key]}`,
+      prompt: current
+        ? "A key is already saved. Paste a new one to replace it, or press Enter to keep it."
+        : step.required
+          ? "Required for Nemotron analysis. Stored in VS Code's encrypted secret storage."
+          : "Optional: used to search dependency advisories. Press Enter to skip.",
+      placeHolder: current ? "•••••••• (saved)" : step.required ? "Paste your Nebius Token Factory key" : "Paste your Tavily key, or leave empty",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (v) => (step.required && !current && !v.trim() ? "The Nebius key is required." : undefined),
+    });
+    if (value === undefined) break; // Escape stops the flow; keys entered so far stay saved
+    if (value.trim()) {
+      await context.secrets.store(step.key, value.trim());
+      saved.push(LABELS[step.key]);
+    }
+  }
+  if (saved.length) vscode.window.showInformationMessage(`Saved: ${saved.join(", ")}.`);
+  const ready = await hasNebiusKey(context);
+  if (ready) await testNebius(context);
+  return ready;
+}
+
 /** Read NEBIUS_API_KEY / TAVILY_API_KEY (and the model id) from a .env file the user picks. */
 export async function importFromEnv(context: vscode.ExtensionContext): Promise<boolean> {
   const picked = await vscode.window.showOpenDialog({
@@ -110,6 +143,7 @@ export async function configureKeys(context: vscode.ExtensionContext): Promise<v
   const tavily = await context.secrets.get(TAVILY_KEY);
   type Item = vscode.QuickPickItem & { action: () => Promise<unknown> };
   const items: Item[] = [
+    { label: "$(key) Enter API keys…", description: "asks for the Nebius key, then the Tavily key", action: () => enterKeys(context) },
     { label: "$(file) Import keys from a .env file…", description: "e.g. CHANGESENTRY/backend/.env", action: () => importFromEnv(context) },
     { label: `$(key) Set Nebius API key`, description: nebius ? "set ✓" : "not set (required for Nemotron)", action: () => setKey(context, NEBIUS_KEY) },
     { label: `$(key) Set Tavily API key`, description: tavily ? "set ✓" : "not set (optional)", action: () => setKey(context, TAVILY_KEY) },

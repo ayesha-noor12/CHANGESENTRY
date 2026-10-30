@@ -41,6 +41,11 @@
         "icon": "$(key)"
       },
       {
+        "command": "changesentry.enterKeys",
+        "title": "Enter API keys (Nebius and Tavily)",
+        "category": "ChangeSentry"
+      },
+      {
         "command": "changesentry.importKeys",
         "title": "Import API keys from .env file",
         "category": "ChangeSentry"

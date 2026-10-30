@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { analyze, BackendError, NEBIUS_KEY, pythonPath, setupPython, TAVILY_KEY } from "./backend";
-import { configureKeys, hasNebiusKey, importFromEnv, setKey, testNebius } from "./keys";
+import { configureKeys, enterKeys, hasNebiusKey, importFromEnv, setKey, testNebius } from "./keys";
 import { ReportPanel } from "./reportPanel";
 import type { AnalysisRun, Risk } from "./types";
 
@@ -25,6 +25,7 @@ export function activate(context: vscode.ExtensionContext) {
   const register = (id: string, fn: () => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
   register("changesentry.configureKeys", () => configureKeys(context));
+  register("changesentry.enterKeys", () => enterKeys(context));
   register("changesentry.setNebiusKey", () => setKey(context, NEBIUS_KEY));
   register("changesentry.setTavilyKey", () => setKey(context, TAVILY_KEY));
   register("changesentry.importKeys", () => importFromEnv(context));
@@ -35,6 +36,15 @@ export function activate(context: vscode.ExtensionContext) {
     else vscode.window.showInformationMessage("No ChangeSentry report yet. Run 'ChangeSentry: Check my changes'.");
   });
   register("changesentry.checkChanges", () => checkChanges(context, log, diagnostics, status));
+
+  void hasNebiusKey(context).then(async (ready) => {
+    if (ready) return;
+    const choice = await vscode.window.showInformationMessage(
+      "ChangeSentry needs your Nebius API key (and optionally a Tavily key) to run Nemotron analysis.",
+      "Enter API keys", "Import from .env file…");
+    if (choice === "Enter API keys") await enterKeys(context);
+    else if (choice === "Import from .env file…") await importFromEnv(context);
+  });
 }
 
 async function updateStatus(context: vscode.ExtensionContext, status: vscode.StatusBarItem) {
@@ -45,8 +55,8 @@ async function updateStatus(context: vscode.ExtensionContext, status: vscode.Sta
     status.backgroundColor = undefined;
   } else {
     status.text = "$(key) ChangeSentry: key needed";
-    status.tooltip = "No Nebius API key set. Click to configure API keys.";
-    status.command = "changesentry.configureKeys";
+    status.tooltip = "No Nebius API key set. Click to enter the Nebius and Tavily keys.";
+    status.command = "changesentry.enterKeys";
     status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
   }
 }
@@ -128,9 +138,9 @@ async function checkChanges(
     const choice = await vscode.window.showWarningMessage(
       "No Nebius API key is set, so Nemotron cannot suggest what to test. Deterministic checks still run.",
       { modal: true },
-      "Import from .env file…", "Enter key…", "Continue without");
-    if (choice === "Import from .env file…") await importFromEnv(context);
-    else if (choice === "Enter key…") await setKey(context, NEBIUS_KEY);
+      "Enter API keys…", "Import from .env file…", "Continue without");
+    if (choice === "Enter API keys…") await enterKeys(context);
+    else if (choice === "Import from .env file…") await importFromEnv(context);
     else if (choice !== "Continue without") return;
   }
   const revisions = await pickRevisions(repo);

@@ -19,7 +19,7 @@ Results:
 ## Setup
 
 - **Python backend.** The first run offers to create a private environment with the backend's requirements (Python 3.10+ must be installed). Or point `changesentry.pythonPath` to an interpreter that already has them.
-- **Keys.** Run **ChangeSentry: Configure API keys**, or click **ChangeSentry: key needed** in the status bar. From there you can:
+- **Keys.** When no key is saved, ChangeSentry asks for **both keys in turn**: the Nebius key (required), then the Tavily key (optional, press Enter to skip). It then tests the Nebius key. This happens on startup, when you click **ChangeSentry: key needed** in the status bar, or when you start a check. You can rerun it with **ChangeSentry: Enter API keys**. **ChangeSentry: Configure API keys** also lets you:
   - **import from a .env file** that has `NEBIUS_API_KEY` and `TAVILY_API_KEY` (and optionally `NEBIUS_MODEL`);
   - enter each key by hand;
   - **test the Nebius key**, which confirms it works and that the configured Nemotron model is available, and offers the available ones if not.
