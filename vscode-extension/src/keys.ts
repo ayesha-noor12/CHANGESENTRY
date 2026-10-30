@@ -1,5 +1,7 @@
 // API key setup: status, manual entry, import from a .env file, and a live Nebius check.
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import * as vscode from "vscode";
 import { NEBIUS_KEY, TAVILY_KEY } from "./backend";
 
@@ -69,22 +71,67 @@ export async function enterKeys(context: vscode.ExtensionContext): Promise<boole
   return ready;
 }
 
-/** Read NEBIUS_API_KEY / TAVILY_API_KEY (and the model id) from a .env file the user picks. */
+const LAST_ENV_FILE = "changesentry.lastEnvFile";
+
+/** .env files that mention NEBIUS_API_KEY: the last one imported, then the open folders and their subfolders. */
+async function findEnvFiles(context: vscode.ExtensionContext): Promise<string[]> {
+  const candidates: string[] = [];
+  const last = context.globalState.get<string>(LAST_ENV_FILE);
+  if (last) candidates.push(last);
+  const backend = vscode.workspace.getConfiguration("changesentry").get<string>("backendPath");
+  if (backend) candidates.push(join(backend, ".env"));
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const root = folder.uri.fsPath;
+    candidates.push(join(root, ".env"));
+    const children = await readdir(root, { withFileTypes: true }).catch(() => []);
+    for (const child of children) {
+      if (child.isDirectory() && !child.name.startsWith(".") && child.name !== "node_modules") {
+        candidates.push(join(root, child.name, ".env"));
+      }
+    }
+  }
+  const found: string[] = [];
+  for (const path of new Set(candidates)) {
+    const text = await readFile(path, "utf-8").catch(() => "");
+    if (/^\s*(?:export\s+)?NEBIUS_API_KEY\s*=\s*\S/m.test(text)) found.push(path);
+  }
+  return found;
+}
+
+/** Read NEBIUS_API_KEY / TAVILY_API_KEY (and the model id) from a .env file, found automatically or picked. */
 export async function importFromEnv(context: vscode.ExtensionContext): Promise<boolean> {
-  const picked = await vscode.window.showOpenDialog({
-    title: "Pick the .env file that holds NEBIUS_API_KEY (for example backend/.env)",
-    canSelectMany: false,
-    openLabel: "Import keys",
-    defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
-  });
-  if (!picked?.[0]) return false;
+  const found = await findEnvFiles(context);
+  const browse = "$(folder-opened) Browse for a .env file…";
+  const choice = await vscode.window.showQuickPick(
+    [...found.map((path) => ({ label: `$(file) ${path}`, path })), { label: browse, path: "" }],
+    {
+      title: "Import API keys from a .env file",
+      placeHolder: found.length
+        ? "Files that contain NEBIUS_API_KEY"
+        : "No .env with NEBIUS_API_KEY in the open folders. Open the CHANGESENTRY folder, or browse.",
+    },
+  );
+  if (!choice) return false;
+  let path = choice.path;
+  if (!path) {
+    vscode.window.showInformationMessage("In the file dialog, press Cmd+Shift+. to show hidden files such as .env.");
+    const picked = await vscode.window.showOpenDialog({
+      title: "Pick the .env file that holds NEBIUS_API_KEY (for example CHANGESENTRY/backend/.env)",
+      canSelectMany: false,
+      openLabel: "Import keys",
+      defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(homedir()),
+    });
+    if (!picked?.[0]) return false;
+    path = picked[0].fsPath;
+  }
   let text: string;
   try {
-    text = await readFile(picked[0].fsPath, "utf-8");
+    text = await readFile(path, "utf-8");
   } catch (err) {
-    vscode.window.showErrorMessage(`Could not read ${picked[0].fsPath}: ${(err as Error).message}`);
+    vscode.window.showErrorMessage(`Could not read ${path}: ${(err as Error).message}`);
     return false;
   }
+  await context.globalState.update(LAST_ENV_FILE, path);
   const values: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Z_]+)\s*=\s*(.*?)\s*$/);
@@ -108,8 +155,19 @@ export async function importFromEnv(context: vscode.ExtensionContext): Promise<b
     vscode.window.showWarningMessage("No NEBIUS_API_KEY or TAVILY_API_KEY found in that file.");
     return false;
   }
-  vscode.window.showInformationMessage(`Imported: ${imported.join(", ")}. Values are not shown or logged.`);
-  return Boolean(values.NEBIUS_API_KEY);
+  if (!values.NEBIUS_API_KEY) {
+    vscode.window.showInformationMessage(`Imported: ${imported.join(", ")}. Values are not shown or logged.`);
+    return false;
+  }
+  const check = await checkNebius(context);
+  if (check.state === "ok") {
+    vscode.window.showInformationMessage(`Imported ${imported.join(", ")}. Nebius accepted the key.`);
+    return true;
+  }
+  vscode.window.showErrorMessage(check.state === "unauthorized"
+    ? `Imported from ${path}, but Nebius rejects this key too (401). Create a new key in the Nebius Token Factory console.`
+    : `Imported from ${path}, but the key could not be verified: ${check.state === "error" ? check.message : check.state}.`);
+  return false;
 }
 
 export type NebiusCheck =
